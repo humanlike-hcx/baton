@@ -1,0 +1,22 @@
+{
+  "name": "workbench",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.4",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @workbench/server --filter @workbench/web dev",
+    "build": "pnpm --filter @workbench/web build",
+    "start": "pnpm --filter @workbench/server start",
+    "test": "vitest run",
+    "typecheck": "pnpm -r --no-bail typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

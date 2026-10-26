@@ -1,0 +1,254 @@
+export type Stage = "plan" | "implement" | "review" | "done";
+export type Role = "plan" | "implement" | "review" | "advisor";
+export type RuntimeKind = "pi" | "cursor";
+export type CredentialSource = "chatgpt" | "deepseek" | "cursor" | "demo";
+export type Policy = "allow" | "ask" | "deny";
+export type Risk = "read" | "write" | "exec" | "network" | "memory";
+
+export interface AgentPermissions {
+  write: boolean;
+  exec: Policy;
+  network: Policy;
+}
+
+export interface AgentCard {
+  id: string;
+  name: string;
+  runtime: RuntimeKind;
+  source: CredentialSource;
+  /** Pi provider id ("openai", "deepseek", "demo"); "cursor" for the ACP runtime. */
+  provider: string;
+  model: string;
+  roles: Role[];
+  permissions: AgentPermissions;
+  /** 0 = free (demo), 1 = cheap, 2 = medium, 3 = expensive. */
+  costTier: number;
+  enabled: boolean;
+  /** Body of the card: the agent's own duties, injected into its briefing. */
+  body: string;
+}
+
+export interface CheckCommand {
+  name: string;
+  command: string;
+  timeoutSec?: number;
+}
+
+export interface WorkspaceSettings {
+  version: 1;
+  name: string;
+  checks: CheckCommand[];
+  limits: {
+    maxHops: number;
+    maxSendBacks: number;
+    maxStalls: number;
+    deepseekCnyPerThread: number;
+    chatgptRunsPerThread: number;
+    cursorRunsPerThread: number;
+  };
+  confirm: {
+    planToImplement: boolean;
+    complete: boolean;
+  };
+  advisor: {
+    onSecondSendBack: boolean;
+    onRepeatedIssues: boolean;
+    beforePlan: boolean;
+  };
+  permissions: {
+    exec: Policy;
+    network: Policy;
+    shellAllow: string[];
+    shellDeny: string[];
+    denyPaths: string[];
+  };
+  memory: { enabled: boolean };
+  budgets: { planner: number; executor: number };
+  approvalTimeoutSec: number;
+  cursor: { command: string };
+}
+
+export type MemoryKind = "fact" | "decision" | "preference";
+
+export interface MemoryEntry {
+  id: string;
+  kind: MemoryKind;
+  status: "active" | "superseded";
+  supersededBy?: string;
+  author: string;
+  run?: string;
+  pinned: boolean;
+  createdAt: string;
+  text: string;
+}
+
+export interface Lesson {
+  id: string;
+  title: string;
+  occurrences: number;
+  status: "open" | "hardened" | "closed";
+  hardenedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+  body: string;
+}
+
+export interface Handoff {
+  runId: string;
+  threadId: string;
+  agentId: string;
+  stage: Stage;
+  createdAt: string;
+  auto: boolean;
+  done: string;
+  files: string[];
+  remaining: string;
+  next: string;
+  verdict?: "pass" | "fail";
+  issues?: string[];
+}
+
+export interface Usage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+export type RunStatus = "running" | "succeeded" | "failed" | "cancelled";
+
+export interface RunRecord {
+  id: string;
+  threadId: string;
+  agentId: string;
+  agentName: string;
+  runtime: RuntimeKind;
+  model: string;
+  family: string;
+  stage: Stage;
+  role: Role;
+  status: RunStatus;
+  startedAt: string;
+  endedAt?: string;
+  snapshotBefore?: string;
+  snapshotAfter?: string;
+  briefingHash: string;
+  briefingBytes: number;
+  handoff?: Handoff;
+  usage?: Usage;
+  changedFiles: string[];
+  decisions: number;
+  finalText: string;
+  error?: string;
+  proposedNext?: { stage: Stage; reason: string; acceptance: string[] };
+  checks?: CheckResult[];
+}
+
+export type CheckStatus = "pass" | "fail" | "skipped" | "error";
+
+export interface CheckResult {
+  name: string;
+  command: string;
+  status: CheckStatus;
+  exitCode: number | null;
+  durationMs: number;
+  output: string;
+}
+
+export type ThreadStatus = "idle" | "running" | "waiting" | "paused" | "done";
+
+export type DecisionKind = "start_stage" | "complete" | "violation";
+
+export interface PendingDecision {
+  id: string;
+  kind: DecisionKind;
+  title: string;
+  detail: string;
+  stage?: Stage;
+  agentId?: string;
+  candidates?: string[];
+  advice?: string;
+  createdAt: string;
+}
+
+export type TimelineItem =
+  | { id: string; at: string; kind: "user"; text: string }
+  | { id: string; at: string; kind: "notice"; level: "info" | "warn" | "error"; text: string }
+  | { id: string; at: string; kind: "run_start"; runId: string; agentId: string; agentName: string; stage: Stage; model: string; runtime: RuntimeKind; briefingBytes: number }
+  | { id: string; at: string; kind: "text"; runId: string; text: string; thinking?: boolean }
+  | {
+      id: string;
+      at: string;
+      kind: "tool";
+      runId: string;
+      tool: string;
+      args: string;
+      status: "running" | "ok" | "error" | "denied";
+      result?: string;
+      tokens?: number;
+    }
+  | { id: string; at: string; kind: "approval"; runId: string; approvalId: string; risk: Risk; title: string; preview: string; status: "pending" | "allowed" | "denied" | "expired" }
+  | { id: string; at: string; kind: "run_end"; runId: string; status: RunStatus; changedFiles: string[]; usage?: Usage; error?: string }
+  | { id: string; at: string; kind: "handoff"; runId: string; handoff: Handoff }
+  | { id: string; at: string; kind: "checks"; runId?: string; results: CheckResult[] }
+  | { id: string; at: string; kind: "decision"; decision: PendingDecision; resolution?: "approved" | "rejected" }
+  | { id: string; at: string; kind: "advisor"; runId: string; agentName: string; card: AdvisorCard; advice: string };
+
+export interface AdvisorCard {
+  facts: string;
+  judgement: string;
+  hoping: string;
+}
+
+export interface Thread {
+  id: string;
+  title: string;
+  task: string;
+  acceptance: string[];
+  stage: Stage;
+  status: ThreadStatus;
+  createdAt: string;
+  updatedAt: string;
+  hops: number;
+  sendBacks: number;
+  stalls: number;
+  summary: string;
+  runs: RunRecord[];
+  items: TimelineItem[];
+  pending?: PendingDecision;
+  /** Preferred agent per stage, chosen by the user. */
+  pinnedAgents: Partial<Record<Stage, string>>;
+  spend: { deepseekCny: number; chatgptRuns: number; cursorRuns: number };
+  reviewIssueRounds: number;
+  /** Highest agent permission level the user has consented to in this thread. */
+  approvedLevel: number;
+  /** Extra automatic hops granted by the user after hitting the hop limit. */
+  extraHops: number;
+  /** User notes queued for the next run. */
+  notes: string[];
+}
+
+export interface BriefingSection {
+  key: string;
+  title: string;
+  source: string;
+  content: string;
+  bytes: number;
+}
+
+export interface Briefing {
+  sections: BriefingSection[];
+  text: string;
+  bytes: number;
+  budget: number;
+  overBudget: boolean;
+  duplicates: { line: string; sections: string[] }[];
+  hash: string;
+}
+
+export interface AuthStatus {
+  chatgpt: { loggedIn: boolean; pending?: { url: string } };
+  deepseek: { configured: boolean };
+  cursor: { installed: boolean; loggedIn: boolean; account?: string; pending?: { url: string }; error?: string };
+}
