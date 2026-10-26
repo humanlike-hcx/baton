@@ -4,7 +4,7 @@ Baton 是接力棒：agent 之间按规则交接，同一时间只有一个 agen
 
 把你已经在付费的订阅（ChatGPT、Cursor、DeepSeek）接进同一个本地工作台：多个 agent 在**同一个工作区**里接力完成任务，共用一套上下文、记忆、工具和规则。引擎是 [Pi](https://github.com/earendil-works/pi)，Cursor 的模型通过官方 Cursor Agent CLI 的 ACP 模式接入。
 
-第一版是本地网页（单人、单机），结构按以后包成桌面应用设计。完整设计见 [`docs/design.md`](docs/design.md)。
+第一版是本地网页（单人、单机），结构按以后包成桌面应用设计。要做什么、验收标准和当前进度见 [`docs/spec.md`](docs/spec.md)，实现方式见 [`docs/design.md`](docs/design.md)。
 
 ## 接入方式
 
