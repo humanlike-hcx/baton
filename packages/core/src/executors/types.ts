@@ -6,7 +6,8 @@ export type ExecutorEvent =
   | { type: "text_end" }
   | { type: "tool_start"; id: string; tool: string; args: unknown }
   | { type: "tool_end"; id: string; tool: string; ok: boolean; result: string }
-  | { type: "notice"; level: "info" | "warn" | "error"; text: string };
+  | { type: "notice"; level: "info" | "warn" | "error"; text: string }
+  | { type: "compaction"; summary: string };
 
 export interface McpLaunch {
   command: string;

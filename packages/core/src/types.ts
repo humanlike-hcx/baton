@@ -147,6 +147,15 @@ export interface RunRecord {
   checks?: CheckResult[];
   /** Chat runs: the user's message(s) this run answered. */
   prompt?: string;
+  /** Handoff draft taken from the latest in-run compaction summary (Pi only). */
+  progress?: CompactionProgress;
+}
+
+export interface CompactionProgress {
+  compactions: number;
+  done: string[];
+  remaining: string[];
+  next: string[];
 }
 
 export type CheckStatus = "pass" | "fail" | "skipped" | "error";

@@ -5,7 +5,7 @@ import { runChecks } from "../src/checks.ts";
 import { compileBriefing } from "../src/context.ts";
 import { defaultSettings } from "../src/defaults.ts";
 import { modelFamily } from "../src/families.ts";
-import { listLessons, listMemory, recordLesson, remember } from "../src/memory.ts";
+import { compactionProgress, listLessons, listMemory, mergeProgress, recordLesson, remember } from "../src/memory.ts";
 import { applyChunks, parsePatch } from "../src/patch.ts";
 import { PermissionError, resolveWorkspacePath, shellPolicy } from "../src/permissions.ts";
 import { isStall, nextTransition, selectAgent } from "../src/router.ts";
@@ -150,6 +150,53 @@ describe("apply_patch", () => {
     if (update.type !== "update") throw new Error();
     expect(applyChunks("one\ntwo\nthree\n", update.chunks, "b.txt")).toBe("one\nTWO\nthree\n");
     expect(() => applyChunks("x\n", update.chunks, "b.txt")).toThrow(/找不到/);
+  });
+});
+
+describe("compaction progress", () => {
+  const full = [
+    "## Goal",
+    "导出配置",
+    "## Progress",
+    "### Done",
+    "- [x] 加了 `exportConfig()`",
+    "- [x] 写了 src/export.test.ts",
+    "### In Progress",
+    "- [ ] 设置页按钮",
+    "### Blocked",
+    "- (none)",
+    "## Key Decisions",
+    "- **格式**：JSON",
+    "## Next Steps",
+    "1. 接上按钮",
+    "",
+    "---",
+    "",
+    "**Turn Context (split turn):**",
+    "",
+    "## Progress So Far",
+    "- 跑过一次 pnpm test",
+    "",
+    "<modified-files>",
+    "src/export.ts",
+    "</modified-files>",
+  ].join("\n");
+
+  it("reads done, remaining and next from both summary formats", () => {
+    const p = compactionProgress(full);
+    expect(p).toEqual({ compactions: 1, done: ["加了 `exportConfig()`", "写了 src/export.test.ts", "跑过一次 pnpm test"], remaining: ["设置页按钮"], next: ["接上按钮"] });
+    expect(compactionProgress("## Progress\n### Done\n- [x] a", p).compactions).toBe(2);
+  });
+
+  it("adds only what the handoff left out and keeps what the agent wrote", () => {
+    const p = compactionProgress(full);
+    const merged = mergeProgress({ done: "加了 exportConfig()。", remaining: "", next: "交给检查" }, p);
+    expect(merged.done).toContain("压缩前的进展");
+    expect(merged.done).toContain("写了 src/export.test.ts");
+    expect(merged.done.match(/exportConfig/g)).toHaveLength(1);
+    expect(merged.remaining).toBe("- 设置页按钮");
+    expect(merged.next).toBe("交给检查");
+    expect(mergeProgress({ done: "x", remaining: "", next: "" }, undefined)).toEqual({ done: "x", remaining: "", next: "" });
   });
 });
 

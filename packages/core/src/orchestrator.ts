@@ -6,7 +6,7 @@ import type { AcpExecutor } from "./executors/acp.ts";
 import type { PiExecutor } from "./executors/pi.ts";
 import type { ExecutorEvent, McpLaunch } from "./executors/types.ts";
 import { modelFamily } from "./families.ts";
-import { saveHandoff } from "./memory.ts";
+import { compactionProgress, mergeProgress, saveHandoff } from "./memory.ts";
 import { permissionLevel } from "./permissions.ts";
 import {
   ADVISOR_TRIGGER_LABEL,
@@ -565,6 +565,11 @@ export class Orchestrator {
       } else if (e.type === "notice") {
         textItem = undefined;
         this.notice(thread, e.level, e.text);
+      } else if (e.type === "compaction") {
+        textItem = undefined;
+        run.progress = compactionProgress(e.summary, run.progress);
+        const counts = `已完成 ${run.progress.done.length} 项、进行中 ${run.progress.remaining.length} 项`;
+        this.notice(thread, "info", `上下文接近上限，Pi 压缩了较早的对话。摘要里的进展（${counts}）已同步到交接草稿，写交接时会补上遗漏的部分。`);
       }
     };
 
@@ -607,12 +612,9 @@ export class Orchestrator {
     if (agent.source === "cursor") thread.spend.cursorRuns++;
 
     if (role !== "advisor" && result.status !== "cancelled") {
-      if (!handoffDraft) {
-        handoffDraft = role === "chat" ? chatHandoff(task, result.finalText, run.changedFiles) : await this.autoHandoff(run, result.finalText, run.changedFiles);
-        run.handoff = { ...handoffDraft, runId: run.id, threadId: thread.id, agentId: agent.id, stage, createdAt: nowIso(), auto: true };
-      } else {
-        run.handoff = { ...handoffDraft, runId: run.id, threadId: thread.id, agentId: agent.id, stage, createdAt: nowIso(), auto: false };
-      }
+      const auto = !handoffDraft;
+      handoffDraft ??= role === "chat" ? chatHandoff(task, result.finalText, run.changedFiles) : await this.autoHandoff(run, result.finalText, run.changedFiles);
+      run.handoff = { ...mergeProgress(handoffDraft, run.progress), runId: run.id, threadId: thread.id, agentId: agent.id, stage, createdAt: nowIso(), auto };
       const missing = run.changedFiles.filter((f) => !run.handoff!.files.includes(f));
       if (missing.length) run.handoff.files = [...run.handoff.files, ...missing];
       saveHandoff(this.ws, run.handoff);
@@ -647,7 +649,8 @@ export class Orchestrator {
           .catch(() => undefined)) ?? "";
     }
     if (!done) done = finalText.trim() ? truncateMiddle(finalText.trim(), 1200).text : run.status === "failed" ? `运行失败：${run.error ?? ""}` : "（没有输出）";
-    return { done, files, remaining: "（agent 没有写交接，以上为自动生成）", next: "", verdict: undefined, issues: undefined };
+    const remaining = [...(run.progress?.remaining ?? []).map((r) => `- ${r}`), "（agent 没有写交接，以上为自动生成）"].join("\n");
+    return { done, files, remaining, next: "", verdict: undefined, issues: undefined };
   }
 
   private async afterRun(thread: Thread, run: RunRecord): Promise<void> {

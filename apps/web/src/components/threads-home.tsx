@@ -55,7 +55,7 @@ export function ThreadsHome() {
           <div className="mt-6 rounded-xl border border-violet-500/30 bg-violet-500/5 p-4 text-sm">
             <div className="font-medium">这是演示工作区</div>
             <p className="mt-1 text-muted-foreground">
-              四个「演示」agent 用脚本化的假模型跑完整流程（工具调用、审批、交接、退回、顾问、回滚），不消耗任何额度。在任务里写「退回」可以看到检查不通过时的退回。
+              四个「演示」agent 用脚本化的假模型跑完整流程（工具调用、审批、交接、退回、顾问、回滚），不消耗任何额度。在任务里写「退回」可以看到检查不通过时的退回；写「压缩」可以看到上下文被压缩后，交接怎样补上压缩前的进展。
               接入真实模型请到
               <a className="mx-1 underline" href={href({ page: "settings", tab: "accounts" })}>
                 设置 → 账号

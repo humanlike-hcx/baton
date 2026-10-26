@@ -2,15 +2,70 @@ import { fauxAssistantMessage, fauxText, fauxToolCall, type FauxResponseStep } f
 import type { Role, Thread } from "../types.ts";
 import { slugify } from "../util.ts";
 
+export const DEMO_CONTEXT_WINDOW = 128_000;
+
+/** A task that mentions「压缩」makes the demo compact after a few hundred tokens instead of near the window. */
+function wantsCompaction(thread: Thread | undefined): boolean {
+  return /压缩/.test(thread?.task ?? "");
+}
+
+export function demoSettings(thread: Thread | undefined): Record<string, unknown> {
+  return wantsCompaction(thread) ? { compaction: { reserveTokens: DEMO_CONTEXT_WINDOW - 300, keepRecentTokens: 120 } } : {};
+}
+
+/** Pi's compaction request: a single user message wrapping the serialized conversation. */
+function summaryRequest(messages: { role: string; content?: unknown }[]): string | undefined {
+  const last = messages.at(-1);
+  if (last?.role !== "user") return undefined;
+  const text = Array.isArray(last.content) ? last.content.map((c: { text?: string }) => c.text ?? "").join("") : String(last.content ?? "");
+  return text.startsWith("<conversation>") || text.startsWith("# Conversation\n") ? text : undefined;
+}
+
+/**
+ * Serves the script in order, but answers Pi's compaction requests (which arrive through the same
+ * model, whenever Pi decides to compact) with a summary instead of consuming a script step.
+ */
+function withSummaries(steps: FauxResponseStep[], summary: (prompt: string) => string): FauxResponseStep[] {
+  const queue = [...steps];
+  const serve: FauxResponseStep = (context, options, state, model) => {
+    const request = summaryRequest(context.messages);
+    if (request !== undefined) return fauxAssistantMessage(summary(request));
+    const next = queue.shift() ?? fauxAssistantMessage("（演示脚本已结束）");
+    return typeof next === "function" ? next(context, options, state, model) : next;
+  };
+  return Array.from({ length: steps.length + 6 }, () => serve);
+}
+
 /**
  * Scripted responses for the demo models, so the whole flow (tools, approvals, handoffs,
- * send-backs, rollback) runs without any account.
+ * send-backs, rollback, compaction) runs without any account.
  */
 export function demoScript(role: Role, thread: Thread | undefined, prompt: string, briefing = ""): FauxResponseStep[] {
   if (role === "chat") return demoChat(prompt, briefing);
   const title = thread?.title ?? "演示任务";
   const slug = thread ? `${slugify(thread.title, 24)}-${thread.id.slice(-4)}` : "demo";
   const note = `notes/${slug}.md`;
+  const summary = (request: string) =>
+    /## Progress So Far/.test(request)
+      ? [`## Original Request`, title, "", "## Progress So Far", `- 创建了 ${note}，写好了背景和做法`, "", "## Context Needed to Continue", `- 产出在 ${note}`].join("\n")
+      : [
+          "## Goal",
+          title,
+          "",
+          "## Progress",
+          "### Done",
+          `- [x] 创建了 ${note}，写好了背景和做法`,
+          "",
+          "### In Progress",
+          `- [ ] 核对 ${note} 的内容`,
+          "",
+          "## Next Steps",
+          "1. 交给检查阶段对照验收标准核对",
+        ].join("\n");
+  return withSummaries(relayScript(role, thread, prompt, title, note), summary);
+}
+
+function relayScript(role: Role, thread: Thread | undefined, prompt: string, title: string, note: string): FauxResponseStep[] {
   const acceptance = thread?.acceptance.length ? thread.acceptance : ["生成一份说明笔记"];
   const toolUse = { stopReason: "toolUse" as const };
   const wantsSendBack = /退回/.test(thread?.task ?? "") && (thread?.sendBacks ?? 0) === 0;
@@ -67,8 +122,17 @@ export function demoScript(role: Role, thread: Thread | undefined, prompt: strin
       const withVerify = wantsSendBack ? content : `${content}\n## 验证方式\n- 运行 \`ls notes\` 能看到这份笔记\n`;
       steps.push(fauxAssistantMessage([fauxToolCall("write_file", { path: note, content: withVerify })], toolUse));
     }
+    steps.push(fauxAssistantMessage([fauxText("确认一下文件内容。"), fauxToolCall("shell", { command: `wc -l ${note}` })], toolUse));
+    if (wantsCompaction(thread)) {
+      // Like a long run whose early turns were compacted away: the handoff only remembers the end.
+      steps.push(
+        fauxAssistantMessage("文件行数确认过了。"),
+        fauxAssistantMessage([fauxToolCall("write_handoff", { done: `确认了 ${note} 的行数。`, files: [note], remaining: "", next: "" })], toolUse),
+        fauxAssistantMessage("交接已写好。"),
+      );
+      return steps;
+    }
     steps.push(
-      fauxAssistantMessage([fauxText("确认一下文件内容。"), fauxToolCall("shell", { command: `wc -l ${note}` })], toolUse),
       fauxAssistantMessage(
         [
           fauxToolCall("write_handoff", {

@@ -11,7 +11,7 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { runTool, type ToolSpec } from "../tools.ts";
-import { demoScript } from "./demo.ts";
+import { DEMO_CONTEXT_WINDOW, demoScript, demoSettings } from "./demo.ts";
 import { HANDOFF_REMINDER, expectsHandoff, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
 
 function resultText(result: unknown): string {
@@ -47,7 +47,7 @@ export class PiExecutor implements Executor {
       const providerId = `demo-${req.runId}`;
       const faux = fauxProvider({
         provider: providerId,
-        models: [{ id: agent.model, name: agent.name, contextWindow: 128_000, maxTokens: 8_000 }],
+        models: [{ id: agent.model, name: agent.name, contextWindow: DEMO_CONTEXT_WINDOW, maxTokens: 8_000 }],
         tokensPerSecond: this.options.demoTokensPerSecond ?? 200,
       });
       faux.setResponses(demoScript(req.role, req.thread, req.prompt, req.briefing.text));
@@ -69,7 +69,7 @@ export class PiExecutor implements Executor {
       return { status: "failed", finalText: "", error: `找不到模型 ${agent.provider}/${agent.model}` };
     }
 
-    const settingsManager = SettingsManager.inMemory({});
+    const settingsManager = SettingsManager.inMemory(agent.source === "demo" ? demoSettings(req.thread) : {});
     const resourceLoader = new DefaultResourceLoader({
       cwd: req.workspaceRoot,
       agentDir: this.options.agentDir,
@@ -139,7 +139,8 @@ export class PiExecutor implements Executor {
           req.emit({ type: "tool_end", id: event.toolCallId, tool: event.toolName, ok: !event.isError, result: resultText(event.result) });
           break;
         case "compaction_end":
-          if (event.result) req.emit({ type: "notice", level: "info", text: "上下文接近上限，Pi 已压缩较早的对话（保留最近部分和结构化摘要）。" });
+          if (event.result) req.emit({ type: "compaction", summary: event.result.summary });
+          else if (event.errorMessage) req.emit({ type: "notice", level: "warn", text: `Pi 压缩上下文失败：${event.errorMessage}` });
           break;
         case "auto_retry_start":
           req.emit({ type: "notice", level: "warn", text: `模型调用失败，第 ${event.attempt} 次重试：${event.errorMessage}` });
