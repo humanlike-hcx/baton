@@ -1,20 +1,13 @@
 import type { IncomingMessage } from "node:http";
 import { serve } from "@hono/node-server";
 import { WebSocketServer } from "ws";
-import { createApp } from "./app.ts";
+import { allowWebSocket, createApp } from "./app.ts";
 import { AppState } from "./state.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.BATON_PORT ?? 47321);
-const ALLOWED_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 
-if (process.env.OPENAI_API_KEY) {
-  // GPT is only reachable through Sign in with ChatGPT; an API key must never take precedence.
-  delete process.env.OPENAI_API_KEY;
-  console.log("[baton] ignoring OPENAI_API_KEY: GPT models are only used through ChatGPT login");
-}
-
-const state = new AppState(`http://${HOST}:${PORT}`);
+const state = new AppState({ baseUrl: `http://${HOST}:${PORT}` });
 await state.init();
 const app = createApp(state);
 
@@ -25,9 +18,7 @@ const server = serve({ fetch: app.fetch, hostname: HOST, port: PORT }, (info) =>
 
 const wss = new WebSocketServer({ noServer: true });
 server.on("upgrade", (req: IncomingMessage, socket, head) => {
-  const origin = req.headers.origin;
-  const url = new URL(req.url ?? "/", "http://localhost");
-  if (url.pathname !== "/ws" || (origin && !ALLOWED_ORIGIN.test(origin)) || !/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host ?? "")) {
+  if (!allowWebSocket({ url: req.url, host: req.headers.host, origin: req.headers.origin })) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
     socket.destroy();
     return;

@@ -41,10 +41,25 @@ interface ChatGptLogin {
   error?: string;
 }
 
+export interface AppStateOptions {
+  /** Base URL the MCP server and `baton` CLI call back into. */
+  baseUrl: string;
+  /** Global data directory (credentials, device id, recent workspaces, demo workspace). Defaults to `batonHome()`. */
+  home?: string;
+  /** Workspace to open on init instead of `BATON_WORKSPACE` / the last one / the demo workspace. */
+  workspace?: string;
+  demo?: boolean;
+  /** Cursor CLI command written into every workspace this state opens. */
+  cursorCommand?: string;
+  /** Streaming speed of the demo models. */
+  demoTokensPerSecond?: number;
+}
+
 export class AppState {
-  readonly home = batonHome();
-  readonly credentials = new FileCredentialStore(this.home);
-  readonly pi = new PiExecutor({ credentials: this.credentials, agentDir: path.join(this.home, "pi-agent") });
+  readonly home: string;
+  readonly baseUrl: string;
+  readonly credentials: FileCredentialStore;
+  readonly pi: PiExecutor;
   readonly acp = new AcpExecutor();
   orchestrator!: Orchestrator;
   demo = false;
@@ -57,8 +72,12 @@ export class AppState {
   private cursorLoginFlow?: { url?: string; cancel: () => void };
   private clients = new Set<Broadcast>();
 
-  constructor(readonly baseUrl: string) {
+  constructor(private readonly options: AppStateOptions) {
+    this.baseUrl = options.baseUrl;
+    this.home = options.home ?? batonHome();
     fs.mkdirSync(this.home, { recursive: true });
+    this.credentials = new FileCredentialStore(this.home);
+    this.pi = new PiExecutor({ credentials: this.credentials, agentDir: path.join(this.home, "pi-agent"), demoTokensPerSecond: options.demoTokensPerSecond });
     this.persisted = readJson<Persisted>(path.join(this.home, "state.json"), { recent: [] });
   }
 
@@ -76,11 +95,16 @@ export class AppState {
   }
 
   async init(): Promise<void> {
-    const envWs = process.env.BATON_WORKSPACE;
+    if (process.env.OPENAI_API_KEY) {
+      // GPT is only reachable through Sign in with ChatGPT; an API key must never take precedence.
+      delete process.env.OPENAI_API_KEY;
+      console.log("[baton] ignoring OPENAI_API_KEY: GPT models are only used through ChatGPT login");
+    }
+    const envWs = this.options.workspace ?? process.env.BATON_WORKSPACE;
     const demoDir = path.join(this.home, "demo-workspace");
     const target = envWs ? path.resolve(envWs) : this.persisted.lastWorkspace && fs.existsSync(this.persisted.lastWorkspace) ? this.persisted.lastWorkspace : demoDir;
     if (target === demoDir) fs.mkdirSync(demoDir, { recursive: true });
-    this.openWorkspace(target, { demo: target === demoDir || process.env.BATON_DEMO === "1" });
+    this.openWorkspace(target, { demo: this.options.demo ?? (target === demoDir || process.env.BATON_DEMO === "1") });
     await this.refreshAuth(true);
   }
 
@@ -94,6 +118,9 @@ export class AppState {
     if (!fs.statSync(resolved).isDirectory()) throw new Error(`不是目录：${resolved}`);
     const demo = options.demo ?? (path.resolve(resolved) === path.join(this.home, "demo-workspace"));
     const ws = Workspace.open(resolved, { demo });
+    if (this.options.cursorCommand && ws.settings().cursor.command !== this.options.cursorCommand) {
+      ws.saveSettings({ ...ws.settings(), cursor: { command: this.options.cursorCommand } });
+    }
     ws.ensureCursorMcp({ command: process.execPath, args: [MCP_BIN], env: { BATON_URL: this.baseUrl } });
     this.demo = demo;
     this.orchestrator = new Orchestrator({

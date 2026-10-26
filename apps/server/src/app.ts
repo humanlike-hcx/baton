@@ -21,6 +21,15 @@ import { HTTPException } from "hono/http-exception";
 import { MOCK_CURSOR, REPO_ROOT, type AppState } from "./state.ts";
 
 const ALLOWED_HOSTS = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
+const ALLOWED_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
+
+/** WebSocket upgrades: only `/ws`, a local Host, and (when the browser sends one) a local Origin. */
+export function allowWebSocket(req: { url?: string; host?: string; origin?: string }): boolean {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  if (url.pathname !== "/ws") return false;
+  if (req.origin && !ALLOWED_ORIGIN.test(req.origin)) return false;
+  return ALLOWED_HOSTS.test(req.host ?? "");
+}
 
 function threadSummary(t: Thread) {
   return { id: t.id, title: t.title, stage: t.stage, status: t.status, updatedAt: t.updatedAt, pending: t.pending?.title, runs: t.runs.length };
@@ -193,7 +202,9 @@ export function createApp(state: AppState): Hono {
   app.post("/api/threads", async (c) => {
     const input = await body<{ title: string; task: string; acceptance: string[]; stage?: Stage; agentId?: string }>(c);
     if (input.stage && !["plan", "implement", "review"].includes(input.stage)) bad("起始阶段不合法");
-    const thread = state.orchestrator.createThread({ ...input, acceptance: input.acceptance ?? [] });
+    if (!input.title?.trim()) bad("请填写标题");
+    if (!input.acceptance?.some((a) => a.trim())) bad("至少需要一条验收标准");
+    const thread = state.orchestrator.createThread({ ...input, acceptance: input.acceptance });
     return c.json(thread);
   });
   app.get("/api/threads/:id", (c) => {
@@ -246,7 +257,7 @@ export function createApp(state: AppState): Hono {
   });
   app.post("/api/auth/deepseek", async (c) => {
     const { key } = await body<{ key: string }>(c);
-    await state.setDeepSeekKey(key ?? "");
+    await state.setDeepSeekKey(key ?? "").catch((e: Error) => bad(e.message));
     return c.json({ ok: true });
   });
   app.delete("/api/auth/deepseek", async (c) => {
