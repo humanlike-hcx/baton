@@ -382,6 +382,7 @@ export class Orchestrator {
       if (results.length) this.push(thread, { kind: "checks", results });
     }
 
+    const consumedNotes = thread.notes.length;
     const { task, extra } = advisor
       ? { task: `## 请教卡\n### 机械事实\n${advisor.card.facts}\n\n### 我的判断\n${advisor.card.judgement}\n\n### 我希望听到的答案\n${advisor.card.hoping}`, extra: "" }
       : this.taskFor(thread, role);
@@ -548,7 +549,7 @@ export class Orchestrator {
     this.push(thread, { kind: "run_end", runId: run.id, status: run.status, changedFiles: run.changedFiles, usage: run.usage, error: run.error }, false);
     if (role !== "advisor") {
       thread.stalls = result.status === "succeeded" && isStall(run) ? thread.stalls + 1 : result.status === "succeeded" ? 0 : thread.stalls;
-      thread.notes = [];
+      thread.notes = thread.notes.slice(consumedNotes);
       thread.summary = rollSummary(thread);
     }
     this.save(thread);
