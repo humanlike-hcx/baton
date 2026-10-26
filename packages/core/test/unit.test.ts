@@ -10,7 +10,7 @@ import { applyChunks, parsePatch } from "../src/patch.ts";
 import { PermissionError, resolveWorkspacePath, shellPolicy } from "../src/permissions.ts";
 import { isStall, nextTransition, selectAgent } from "../src/router.ts";
 import { runShell } from "../src/shell.ts";
-import { toolsFor } from "../src/tools.ts";
+import { ALL_TOOLS, toolsFor } from "../src/tools.ts";
 import type { AgentCard, RunRecord, Thread } from "../src/types.ts";
 import { truncateMiddle } from "../src/util.ts";
 import { Workspace } from "../src/workspace.ts";
@@ -137,6 +137,14 @@ describe("tools per role", () => {
     expect(toolsFor(gpt, "advisor").map((t) => t.name)).toEqual(["read_file", "list_files", "search", "read_context", "memory_search"]);
     const readOnly = agent({ id: "r", model: "x", permissions: { write: "deny", exec: "deny", network: "deny" } });
     expect(toolsFor(readOnly, "implement").map((t) => t.name)).not.toContain("shell");
+  });
+
+  it("gives Pi agents no network tool, even with network allowed", () => {
+    expect(ALL_TOOLS.filter((t) => t.risk === "network")).toEqual([]);
+    const online = agent({ id: "n", model: "deepseek-v4-pro", permissions: { write: "allow", exec: "allow", network: "allow" } });
+    for (const role of ["plan", "implement", "review", "advisor", "chat"] as const) {
+      expect(toolsFor(online, role).every((t) => t.risk !== "network"), role).toBe(true);
+    }
   });
 });
 

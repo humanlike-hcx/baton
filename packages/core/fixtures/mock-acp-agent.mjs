@@ -111,6 +111,17 @@ async function prompt(params) {
       update(params.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "failed", content: [{ type: "content", content: { type: "text", text: "permission denied" } }] });
     }
   }
+  if (text.includes("联网")) {
+    const web = { toolCallId: "t3", title: "Fetch https://example.com/docs", kind: "fetch", status: "pending", rawInput: { url: "https://example.com/docs" } };
+    update(params.sessionId, { sessionUpdate: "tool_call", ...web });
+    const fetched = await permission(params.sessionId, web);
+    update(params.sessionId, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t3",
+      status: fetched ? "completed" : "failed",
+      content: [{ type: "content", content: { type: "text", text: fetched ? "<html>example docs</html>" : "rejected" } }],
+    });
+  }
   const run = { toolCallId: "t2", title: "Run find notes -type f", kind: "execute", status: "pending", rawInput: { command: "find notes -type f" } };
   update(params.sessionId, { sessionUpdate: "tool_call", ...run });
   const allowed = await permission(params.sessionId, run);

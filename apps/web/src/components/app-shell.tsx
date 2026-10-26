@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Bot, BookText, ChartColumn, FolderOpen, Menu, MessagesSquare, Plus, Settings, Wifi, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -30,9 +30,9 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
   const activeThread = route.page === "threads" ? route.threadId : undefined;
   const auth = state?.auth;
   const accounts = [
-    { label: "ChatGPT", ok: auth?.chatgpt.loggedIn },
-    { label: "DeepSeek", ok: auth?.deepseek.configured },
-    { label: "Cursor", ok: auth?.cursor.loggedIn },
+    { label: "ChatGPT", ok: auth?.chatgpt.loggedIn, off: "未登录" },
+    { label: "DeepSeek", ok: auth?.deepseek.configured, off: "未配置" },
+    { label: "Cursor", ok: auth?.cursor.loggedIn, off: auth?.cursor.installed === false ? "未安装 CLI" : "未登录" },
   ];
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
@@ -124,6 +124,7 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
           {accounts.map((a) => (
             <span
               key={a.label}
+              title={`${a.label}：${a.ok ? "可用" : a.off}`}
               className={cn(
                 "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs",
                 a.ok ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "text-muted-foreground",
@@ -131,6 +132,7 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
             >
               <span className={cn("size-1.5 rounded-full", a.ok ? "bg-emerald-500" : "bg-zinc-300")} />
               {a.label}
+              <span className="sr-only">：{a.ok ? "可用" : a.off}</span>
             </span>
           ))}
         </a>
@@ -139,6 +141,26 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
           {connected ? "已连接本地服务" : "正在重连本地服务…"}
         </div>
       </div>
+    </div>
+  );
+}
+
+function DisconnectedBanner() {
+  const { connected } = useBaton();
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    if (connected) {
+      setShow(false);
+      return;
+    }
+    const timer = setTimeout(() => setShow(true), 1500);
+    return () => clearTimeout(timer);
+  }, [connected]);
+  if (!show) return null;
+  return (
+    <div role="status" className="flex items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+      <WifiOff className="size-4 shrink-0" />
+      和本地服务的连接断开了，正在自动重连。请确认 Baton 服务还在运行。
     </div>
   );
 }
@@ -163,6 +185,7 @@ export function AppShell({ route, children }: { route: Route; children: ReactNod
           </Button>
           <span className="text-sm font-semibold">Baton</span>
         </header>
+        <DisconnectedBanner />
         <main className="min-h-0 flex-1">{children}</main>
       </div>
     </div>

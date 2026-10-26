@@ -72,7 +72,7 @@ function NewChat() {
     <div className="mt-6 space-y-5">
       <div className="space-y-1.5">
         <Label>和谁聊</Label>
-        <Select value={chosen} onValueChange={setAgentId}>
+        <Select value={chosen ?? ""} onValueChange={setAgentId}>
           <SelectTrigger className="w-full sm:w-96">
             <SelectValue placeholder="选择 agent" />
           </SelectTrigger>

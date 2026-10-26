@@ -30,7 +30,7 @@ function StageStepper({ thread }: { thread: Thread }) {
             {i > 0 && <span className={cn("h-px w-4 sm:w-6", done || active ? "bg-foreground/40" : "bg-border")} />}
             <span
               className={cn(
-                "inline-flex items-center gap-1 rounded-full px-2 py-0.5",
+                "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 whitespace-nowrap",
                 active && "bg-primary text-primary-foreground",
                 done && "text-foreground",
                 !active && !done && "text-muted-foreground",

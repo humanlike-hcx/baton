@@ -257,7 +257,7 @@ function AgentEditor({ agent, isNew, open, onOpenChange, demo }: { agent: AgentC
               {showCustom ? (
                 <Input value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value.trim() })} placeholder="模型 ID，例如 sonnet-4.5" className="font-mono" />
               ) : (
-                <Select value={draft.model || undefined} onValueChange={(v) => setDraft({ ...draft, model: v })}>
+                <Select value={draft.model ?? ""} onValueChange={(v) => setDraft({ ...draft, model: v })}>
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder={loadingModels ? "加载模型列表…" : "选择模型"} />
                   </SelectTrigger>
@@ -483,6 +483,11 @@ export function BriefingInspector({ agent, onOpenChange }: { agent?: AgentView; 
 export function AgentsPage() {
   const { state, error } = useBaton();
   const [editing, setEditing] = useState<{ agent: AgentCard; isNew: boolean }>();
+  const [editorOpen, setEditorOpen] = useState(false);
+  const edit = (agent: AgentCard, isNew: boolean) => {
+    setEditing({ agent, isNew });
+    setEditorOpen(true);
+  };
   const [inspecting, setInspecting] = useState<AgentView>();
 
   const groups = useMemo(() => {
@@ -502,7 +507,7 @@ export function AgentsPage() {
               每张卡片是一个能力单元。接力时工作台按角色、权限、账号是否可用、额度和成本挑人，检查者不会和实现者同一个模型家族。
             </p>
           </div>
-          <Button onClick={() => setEditing({ agent: blankAgent(), isNew: true })}>
+          <Button onClick={() => edit(blankAgent(), true)}>
             <Plus /> 添加 agent
           </Button>
         </div>
@@ -524,7 +529,7 @@ export function AgentsPage() {
             <h2 className="text-sm font-medium text-muted-foreground">{SOURCE_LABEL[g.source]}</h2>
             <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {g.agents.map((a) => (
-                <AgentCardView key={a.id} agent={a} onEdit={() => setEditing({ agent: a, isNew: false })} onInspect={() => setInspecting(a)} />
+                <AgentCardView key={a.id} agent={a} onEdit={() => edit(a, false)} onInspect={() => setInspecting(a)} />
               ))}
             </div>
           </section>
@@ -534,8 +539,8 @@ export function AgentsPage() {
       <AgentEditor
         agent={editing?.agent ?? blankAgent()}
         isNew={editing?.isNew ?? true}
-        open={!!editing}
-        onOpenChange={(o) => !o && setEditing(undefined)}
+        open={editorOpen}
+        onOpenChange={setEditorOpen}
         demo={state?.workspace.demo ?? false}
       />
       <BriefingInspector agent={inspecting} onOpenChange={(o) => !o && setInspecting(undefined)} />
