@@ -311,6 +311,7 @@ export class Orchestrator {
 
   /** Picks an agent for the stage and either runs it or asks the user first. */
   private async begin(thread: Thread, stage: Stage, opts: { agentId?: string; userInitiated?: boolean; sendBack?: boolean } = {}): Promise<void> {
+    thread.status = "running";
     const agents = this.ws.listAgents();
     const selection = selectAgent(stage, { thread, agents, settings: this.ws.settings(), available: this.options.available }, { preferred: opts.agentId });
     const agent = selection.chosen;

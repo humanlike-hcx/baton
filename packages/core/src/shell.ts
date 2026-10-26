@@ -29,7 +29,7 @@ export function runShell(
   const started = Date.now();
   const maxBytes = options.maxBytes ?? 16 * 1024;
   return new Promise((resolve) => {
-    const child = spawn("bash", ["-lc", command], {
+    const child = spawn("bash", ["-c", command], {
       cwd: options.cwd,
       env: options.env ?? scrubbedEnv(),
       stdio: ["ignore", "pipe", "pipe"],

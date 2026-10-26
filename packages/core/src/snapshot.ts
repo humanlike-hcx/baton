@@ -17,7 +17,12 @@ export class ShadowGit {
     try {
       const { stdout } = await exec(
         "git",
-        [`--git-dir=${this.gitDir}`, `--work-tree=${this.root}`, "-c", "core.autocrlf=false", "-c", "core.quotepath=false", ...args],
+        [
+          `--git-dir=${this.gitDir}`,
+          `--work-tree=${this.root}`,
+          ...["core.autocrlf=false", "core.quotepath=false", "core.fsmonitor=false", "commit.gpgsign=false", "gc.auto=0", "core.hooksPath=/dev/null"].flatMap((c) => ["-c", c]),
+          ...args,
+        ],
         {
           cwd: this.root,
           maxBuffer: 64 * 1024 * 1024,
