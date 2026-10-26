@@ -1,5 +1,8 @@
 node_modules/
+.pnpm-store/
 dist/
+apps/desktop/build/
+apps/desktop/out/
 *.tsbuildinfo
 .DS_Store
 .env

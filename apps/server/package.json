@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./serve": "./src/serve.ts",
+    "./state": "./src/state.ts"
+  },
   "scripts": {
     "dev": "tsx watch --clear-screen=false --ignore '**/.baton/**' src/main.ts",
     "start": "NODE_ENV=production tsx src/main.ts",

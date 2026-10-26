@@ -160,6 +160,21 @@ export class Orchestrator {
     }
   }
 
+  /** Service shutdown: cancels every run in progress, waits for them to wind down, and writes every thread to disk. */
+  async stopAll(timeoutMs = 3000): Promise<void> {
+    for (const id of [...this.active.keys()]) this.cancel(id);
+    // A run leaves `active` before its snapshot and status bookkeeping finish, so wait on the threads themselves.
+    const busy = () => this.active.size > 0 || [...this.threads.values()].some((t) => t.status === "running");
+    const start = Date.now();
+    while (busy() && Date.now() - start < timeoutMs) await new Promise((r) => setTimeout(r, 50));
+    for (const [id, timer] of this.saveTimers) {
+      clearTimeout(timer);
+      this.saveTimers.delete(id);
+      const thread = this.threads.get(id);
+      if (thread) this.ws.saveThread(thread);
+    }
+  }
+
   private push<T extends Omit<TimelineItem, "id" | "at">>(thread: Thread, item: T, save = true): TimelineItem {
     const full = { id: newId("it"), at: nowIso(), ...item } as unknown as TimelineItem;
     thread.items.push(full);

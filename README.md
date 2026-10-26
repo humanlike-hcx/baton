@@ -73,6 +73,14 @@ pnpm build   # 构建网页到 apps/web/dist
 pnpm start   # API 服务同时托管网页，打开 http://127.0.0.1:47321
 ```
 
+### 桌面版（macOS）
+
+```bash
+pnpm desktop   # 生成 apps/desktop/out/Baton-darwin-<arch>/Baton.app
+```
+
+双击 `Baton.app` 即可使用，服务和界面与网页版是同一套，数据目录同为 `~/.baton`；关掉窗口即退出。桌面版和网页版用同一个端口，不能同时开。应用只做了 ad-hoc 签名，适合在本机自己构建、自己用。
+
 ## 给 agent 用的共享工具
 
 Pi 里的 agent 直接调用工作台工具。Cursor agent 通过工作台写进工作区 `.cursor/mcp.json` 的 MCP 服务（`packages/mcp/bin/baton-mcp.mjs`）使用同一套：`read_context`、`memory_search`、`remember`、`write_handoff`。

@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import type { Thread, WorkspaceSettings } from "@baton/core";
 import { createApp } from "../src/app.ts";
-import { AppState, MOCK_CURSOR } from "../src/state.ts";
+import { AppState, MOCK_CURSOR, nodeScriptCommand } from "../src/state.ts";
 
 export const HOST = "127.0.0.1:47321";
-export const MOCK_CURSOR_COMMAND = `node ${MOCK_CURSOR}`;
+export const MOCK_CURSOR_COMMAND = nodeScriptCommand(MOCK_CURSOR);
 
 export function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

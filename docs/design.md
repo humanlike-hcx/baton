@@ -167,6 +167,7 @@ apps/web        Vite + React + shadcn/ui 单页应用，只通过 HTTP/WebSocket
 apps/server     本地服务：HTTP + WebSocket，凭证、登录、审批、运行调度
 packages/core   harness：工作区存储、规则拼装、记忆、路由、工具注册表、权限、执行器
 packages/mcp    baton-mcp（stdio）与 baton 命令行，回调本地服务
+apps/desktop    Electron 外壳：在主进程里启动同一个服务，窗口加载它提供的同一套界面
 ```
 
 执行器：
@@ -175,4 +176,14 @@ packages/mcp    baton-mcp（stdio）与 baton 命令行，回调本地服务
 - **ACP 执行器**：启动 `agent --model <id> acp`，按 ACP 流程 `initialize → session/new → session/prompt`，把 `session/update` 转成运行事件，把 `session/request_permission` 转给审批。
 - **演示执行器**：pi-ai 的假模型，不需要任何账号即可跑通整条流程，用于开发与测试。
 
-服务只监听 `127.0.0.1`。以后做桌面版，用 Electron 装入同一个服务和同一套界面。
+服务只监听 `127.0.0.1`。
+
+### 11.1 桌面版
+
+- **同一个服务**：网页版（`apps/server/src/main.ts`）和桌面版都通过 `apps/server/src/serve.ts` 的 `startServer` 启动服务，端口同为 47321，数据目录同为 `~/.baton`。两者不能同时开；桌面版遇到端口被占用时弹窗说明后退出。
+- **同一套界面**：桌面窗口直接加载 `http://127.0.0.1:47321/`，也就是服务在生产模式下托管的 `apps/web` 构建产物。窗口内不开放 Node 能力（`contextIsolation`、`sandbox`），界面仍然只走 HTTP 和 WebSocket；外部链接（如 ChatGPT 登录页）交给系统浏览器打开。
+- **生命周期**：单实例。关掉窗口即退出应用，macOS 上也一样；退出前 `stopAll` 取消所有运行中的 agent（子进程随之结束），把线程写盘，再关闭端口。
+- **打包**：`pnpm desktop` 先构建界面，再用 esbuild 把桌面主进程、服务、`baton-mcp` 各打成一个文件，连同界面产物和模拟 Cursor 一起放进 `apps/desktop/build/app`，最后用 `@electron/packager` 生成 `apps/desktop/out/Baton-darwin-<arch>/Baton.app`，并做 ad-hoc 签名（不做正式签名和公证）。`BATON_RESOURCES` 环境变量告诉服务这些资源在包里的位置。
+- **Node 命令**：包里没有单独的 Node。服务需要用 Node 运行的脚本（`baton-mcp`、模拟 Cursor）一律用 Electron 自己的可执行文件，加 `ELECTRON_RUN_AS_NODE=1` 启动，见 `state.ts` 的 `nodeScriptCommand`。
+- **PATH**：从访达启动的应用只有系统最小的 PATH，找不到 Cursor CLI 和 git。启动时读一次登录 shell 的 PATH 并合并进来。
+- **日志**：桌面版没有终端，启动和退出记录写到 Baton 数据目录下的 `desktop.log`（默认 `~/.baton/desktop.log`）。

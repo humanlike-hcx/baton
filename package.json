@@ -10,6 +10,7 @@
     "dev": "pnpm --parallel --filter @baton/server --filter @baton/web dev",
     "build": "pnpm --filter @baton/web build",
     "start": "pnpm --filter @baton/server start",
+    "desktop": "pnpm build && pnpm --filter @baton/desktop build",
     "test": "vitest run",
     "typecheck": "pnpm -r --no-bail typecheck"
   },

@@ -24,8 +24,20 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(here, "../../..");
-export const MCP_BIN = path.join(REPO_ROOT, "packages/mcp/bin/baton-mcp.mjs");
-export const MOCK_CURSOR = path.join(REPO_ROOT, "packages/core/fixtures/mock-acp-agent.mjs");
+/** Packaged builds (the desktop app) ship the web app, MCP server and mock Cursor here instead of the source tree. */
+const RESOURCES = process.env.BATON_RESOURCES;
+export const WEB_DIST = RESOURCES ? path.join(RESOURCES, "web") : path.join(REPO_ROOT, "apps/web/dist");
+export const MCP_BIN = RESOURCES ? path.join(RESOURCES, "mcp/baton-mcp.mjs") : path.join(REPO_ROOT, "packages/mcp/bin/baton-mcp.mjs");
+export const MOCK_CURSOR = RESOURCES ? path.join(RESOURCES, "fixtures/mock-acp-agent.mjs") : path.join(REPO_ROOT, "packages/core/fixtures/mock-acp-agent.mjs");
+
+/** Inside Electron, Baton's own binary only behaves as Node when this is set; outside it is empty. */
+export const NODE_ENV_VARS: Record<string, string> = process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {};
+
+/** A command line that runs `script` with the same Node that runs Baton, so no separate Node install is needed. */
+export function nodeScriptCommand(script: string): string {
+  const env = Object.entries(NODE_ENV_VARS).map(([k, v]) => `${k}=${v}`);
+  return [...(env.length ? ["env", ...env] : []), `"${process.execPath}"`, `"${script}"`].join(" ");
+}
 
 interface Persisted {
   lastWorkspace?: string;
@@ -121,7 +133,7 @@ export class AppState {
     if (this.options.cursorCommand && ws.settings().cursor.command !== this.options.cursorCommand) {
       ws.saveSettings({ ...ws.settings(), cursor: { command: this.options.cursorCommand } });
     }
-    ws.ensureCursorMcp({ command: process.execPath, args: [MCP_BIN], env: { BATON_URL: this.baseUrl } });
+    ws.ensureCursorMcp({ command: process.execPath, args: [MCP_BIN], env: { ...NODE_ENV_VARS, BATON_URL: this.baseUrl } });
     this.demo = demo;
     this.orchestrator = new Orchestrator({
       ws,
@@ -129,7 +141,7 @@ export class AppState {
       acp: this.acp,
       available: (agent) => this.available(agent),
       onEvent: (event: OrchestratorEvent) => this.broadcast(event),
-      mcpLaunch: (token) => ({ command: process.execPath, args: [MCP_BIN], env: { BATON_URL: this.baseUrl, BATON_TOKEN: token } }),
+      mcpLaunch: (token) => ({ command: process.execPath, args: [MCP_BIN], env: { ...NODE_ENV_VARS, BATON_URL: this.baseUrl, BATON_TOKEN: token } }),
       summarize: (prompt) => this.summarize(prompt),
     });
     this.persisted.lastWorkspace = ws.root;

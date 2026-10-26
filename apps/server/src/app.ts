@@ -21,7 +21,7 @@ import {
 } from "@baton/core";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { MOCK_CURSOR, REPO_ROOT, type AppState } from "./state.ts";
+import { MOCK_CURSOR, REPO_ROOT, WEB_DIST, nodeScriptCommand, type AppState } from "./state.ts";
 
 const ALLOWED_HOSTS = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 const ALLOWED_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
@@ -81,7 +81,7 @@ export function createApp(state: AppState): Hono {
       settings: ws.settings(),
       agents: ws.listAgents().map((a) => ({ ...a, available: state.available(a), routeError: validateAgentRoute(a) })),
       threads: state.orchestrator.listThreads().map(threadSummary),
-      mockCursorCommand: `node ${MOCK_CURSOR}`,
+      mockCursorCommand: nodeScriptCommand(MOCK_CURSOR),
     });
   });
 
@@ -356,10 +356,9 @@ export function createApp(state: AppState): Hono {
 
   app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
-  const dist = path.join(REPO_ROOT, "apps/web/dist");
-  if (process.env.NODE_ENV === "production" && fs.existsSync(dist)) {
-    app.use("/*", serveStatic({ root: path.relative(process.cwd(), dist) }));
-    app.get("*", (c) => c.html(fs.readFileSync(path.join(dist, "index.html"), "utf8")));
+  if (process.env.NODE_ENV === "production" && fs.existsSync(WEB_DIST)) {
+    app.use("/*", serveStatic({ root: path.relative(process.cwd(), WEB_DIST) }));
+    app.get("*", (c) => c.html(fs.readFileSync(path.join(WEB_DIST, "index.html"), "utf8")));
   } else {
     app.get("/", (c) => c.text("Baton API is running. Open the web app (pnpm dev) at http://127.0.0.1:47320"));
   }

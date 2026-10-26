@@ -1,0 +1,19 @@
+{
+  "name": "@baton/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/build.mjs --no-package && electron build/app",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@baton/server": "workspace:*"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^45.0.0",
+    "esbuild": "^0.28.2"
+  }
+}
