@@ -1,11 +1,11 @@
 {
-  "name": "@workbench/mcp",
+  "name": "@baton/mcp",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "workbench-mcp": "./bin/workbench-mcp.mjs",
-    "wb": "./bin/wb.mjs"
+    "baton-mcp": "./bin/baton-mcp.mjs",
+    "baton": "./bin/baton.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

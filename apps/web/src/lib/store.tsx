@@ -21,7 +21,7 @@ interface StoreValue {
 
 const StoreContext = createContext<StoreValue | null>(null);
 
-export function WorkbenchProvider({ children }: { children: ReactNode }) {
+export function BatonProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppStateResponse>();
   const [error, setError] = useState<string>();
   const [connected, setConnected] = useState(false);
@@ -103,15 +103,15 @@ export function WorkbenchProvider({ children }: { children: ReactNode }) {
   return <StoreContext.Provider value={{ state, error, connected, refresh, subscribe }}>{children}</StoreContext.Provider>;
 }
 
-export function useWorkbench(): StoreValue {
+export function useBaton(): StoreValue {
   const value = useContext(StoreContext);
-  if (!value) throw new Error("useWorkbench must be used inside WorkbenchProvider");
+  if (!value) throw new Error("useBaton must be used inside BatonProvider");
   return value;
 }
 
 /** Loads a thread and keeps it live from WebSocket updates and streaming deltas. */
 export function useThread(id: string | undefined) {
-  const { subscribe } = useWorkbench();
+  const { subscribe } = useBaton();
   const [thread, setThread] = useState<Thread>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);

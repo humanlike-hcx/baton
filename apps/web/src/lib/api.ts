@@ -11,7 +11,7 @@ export async function api<T>(path: string, options: { method?: string; body?: un
   try {
     res = await fetch(path, {
       method: options.method ?? "GET",
-      headers: { "content-type": "application/json", "x-workbench": "1" },
+      headers: { "content-type": "application/json", "x-baton": "1" },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
   } catch {

@@ -84,7 +84,7 @@ function hasRipgrep(): boolean {
 
 async function searchFiles(root: string, start: string, pattern: string, glob: string | undefined, settingsDeny: string[]): Promise<string[]> {
   if (hasRipgrep()) {
-    const args = ["-n", "--no-heading", "--color=never", "-m", "20", "--max-columns=300", "-g", "!.workbench/shadow.git", "-g", "!.git"];
+    const args = ["-n", "--no-heading", "--color=never", "-m", "20", "--max-columns=300", "-g", "!.baton/shadow.git", "-g", "!.git"];
     for (const deny of settingsDeny) args.push("-g", `!${deny}`);
     if (glob) args.push("-g", glob);
     args.push("-e", pattern, path.relative(root, start) || ".");

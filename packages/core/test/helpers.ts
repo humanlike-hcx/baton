@@ -8,7 +8,7 @@ import { Orchestrator, type OrchestratorEvent } from "../src/orchestrator.ts";
 import type { Thread } from "../src/types.ts";
 import { Workspace } from "../src/workspace.ts";
 
-export function tempDir(prefix = "wb-test-"): string {
+export function tempDir(prefix = "baton-test-"): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
@@ -42,7 +42,7 @@ export function demoSetup(options: { autoApprove?: boolean; mutate?: (ws: Worksp
   let orch!: Orchestrator;
   orch = new Orchestrator({
     ws,
-    pi: new PiExecutor({ credentials: memoryCredentials(), agentDir: tempDir("wb-agent-"), demoTokensPerSecond: 100_000 }),
+    pi: new PiExecutor({ credentials: memoryCredentials(), agentDir: tempDir("baton-agent-"), demoTokensPerSecond: 100_000 }),
     acp: new AcpExecutor(),
     available: (agent) => agent.source === "demo" || (agent.source === "cursor" && ws.settings().cursor.command.includes("mock-acp")),
     onEvent: (e) => {

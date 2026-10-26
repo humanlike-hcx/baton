@@ -231,10 +231,10 @@ export class AcpExecutor implements Executor {
       await conn.request("initialize", {
         protocolVersion: 1,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-        clientInfo: { name: "workbench", title: "Workbench", version: "0.1.0" },
+        clientInfo: { name: "baton", title: "Baton", version: "0.1.0" },
       });
       const mcpServers = req.mcp
-        ? [{ name: "workbench", command: req.mcp.command, args: req.mcp.args, env: Object.entries(req.mcp.env).map(([name, value]) => ({ name, value })) }]
+        ? [{ name: "baton", command: req.mcp.command, args: req.mcp.args, env: Object.entries(req.mcp.env).map(([name, value]) => ({ name, value })) }]
         : [];
       let created: Json;
       try {
@@ -250,7 +250,7 @@ export class AcpExecutor implements Executor {
         const ask = modes.find((m) => /ask|read/i.test(`${m.id} ${m.name}`));
         if (ask) await conn.request("session/set_mode", { sessionId, modeId: ask.id }).catch(() => undefined);
       }
-      const text = `<workbench-briefing>\n${req.briefing.text}\n</workbench-briefing>\n\n${req.prompt}`;
+      const text = `<baton-briefing>\n${req.briefing.text}\n</baton-briefing>\n\n${req.prompt}`;
       const result: Json = await conn.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
       if (currentText) {
         finalText = currentText;

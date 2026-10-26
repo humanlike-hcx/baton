@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { STAGE_LABEL, STATUS_LABEL, STATUS_TONE, timeAgo } from "@/lib/format";
 import { href } from "@/lib/router";
-import { useWorkbench } from "@/lib/store";
+import { useBaton } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 const FLOW = [
@@ -16,7 +16,7 @@ const FLOW = [
 ];
 
 export function ThreadsHome() {
-  const { state, error } = useWorkbench();
+  const { state, error } = useBaton();
   if (error && !state) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-center">

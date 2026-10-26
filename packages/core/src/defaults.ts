@@ -9,7 +9,7 @@ export const RULE_FILES: Record<string, string> = {
 - 房间上下文用 \`read_context\` 读、\`update_context\` 改，只记目标、约束、当前状态这类长期有效的内容。
 - 事实、决定、偏好用 \`remember\` 写入记忆；写之前先 \`memory_search\`，已有相近条目就不要重复写。
 - 踩过的坑用 \`record_lesson\` 记下来，写清怎么复现。
-- 不要直接编辑 \`.workbench/\` 下的文件，用对应的工具。
+- 不要直接编辑 \`.baton/\` 下的文件，用对应的工具。
 
 ## 交接
 - 结束前必须调用一次 \`write_handoff\`：做了什么、改了哪些文件、还剩什么、建议下一步。
@@ -54,7 +54,7 @@ export const RULE_FILES: Record<string, string> = {
 `,
   "runtime-cursor.md": `# 运行时：Cursor
 - 你在 Cursor Agent 里运行，改文件和执行命令都要经过工作台审批。
-- 工作台的工具通过 MCP 服务 \`workbench\` 提供：read_context、memory_search、remember、write_handoff；也可以用命令行 \`wb\`。
+- 工作台的工具通过 MCP 服务 \`baton\` 提供：read_context、memory_search、remember、write_handoff；也可以用命令行 \`baton\`。
 - 结束前必须调用 \`write_handoff\`。
 `,
 };
@@ -71,18 +71,18 @@ export const CONTEXT_TEMPLATE = `# 房间上下文
 - （进展到哪了）
 `;
 
-export const AGENTS_MD_BEGIN = "<!-- workbench:begin -->";
-export const AGENTS_MD_END = "<!-- workbench:end -->";
+export const AGENTS_MD_BEGIN = "<!-- baton:begin -->";
+export const AGENTS_MD_END = "<!-- baton:end -->";
 export const AGENTS_MD_SECTION = `${AGENTS_MD_BEGIN}
-## Workbench
+## Baton
 
-本工作区由 Workbench 管理，多个 agent 共用以下状态：
+本工作区由 Baton 管理，多个 agent 共用以下状态：
 
-- \`.workbench/CONTEXT.md\`：房间上下文
-- \`.workbench/memory/\`：记忆（只追加，不覆盖）
-- \`.workbench/handoffs/\`：交接记录
+- \`.baton/CONTEXT.md\`：房间上下文
+- \`.baton/memory/\`：记忆（只追加，不覆盖）
+- \`.baton/handoffs/\`：交接记录
 
-结束一次工作前写交接（\`write_handoff\` 工具或 \`wb handoff\` 命令）。不要直接改 \`.workbench/\` 下的文件。
+结束一次工作前写交接（\`write_handoff\` 工具或 \`baton handoff\` 命令）。不要直接改 \`.baton/\` 下的文件。
 ${AGENTS_MD_END}`;
 
 export function defaultSettings(name: string): WorkspaceSettings {
@@ -105,7 +105,7 @@ export function defaultSettings(name: string): WorkspaceSettings {
       network: "ask",
       shellAllow: ["ls", "pwd", "cat", "git status", "git diff", "git log"],
       shellDeny: ["sudo", "rm -rf /", "git push", "curl", "wget"],
-      denyPaths: [".env", ".env.*", ".git/**", ".workbench/shadow.git/**"],
+      denyPaths: [".env", ".env.*", ".git/**", ".baton/shadow.git/**"],
     },
     memory: { enabled: true },
     budgets: { planner: 24 * 1024, executor: 12 * 1024 },

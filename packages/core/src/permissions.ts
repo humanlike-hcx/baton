@@ -36,7 +36,7 @@ export function matchesDeny(rel: string, patterns: string[]): string | undefined
 
 /**
  * Resolves a tool-supplied path against the workspace. Rejects anything that leaves the
- * workspace (including through symlinks), denylisted paths, and writes into `.workbench/`.
+ * workspace (including through symlinks), denylisted paths, and writes into `.baton/`.
  */
 export function resolveWorkspacePath(
   root: string,
@@ -52,8 +52,8 @@ export function resolveWorkspacePath(
   const rel = path.relative(root, abs).split(path.sep).join("/") || ".";
   const denied = matchesDeny(rel, settings.permissions.denyPaths);
   if (denied) throw new PermissionError(`路径被拒绝（规则 ${denied}）：${rel}`);
-  if (mode === "write" && (rel === ".workbench" || rel.startsWith(".workbench/"))) {
-    throw new PermissionError("不能直接写 .workbench/，请用 update_context / remember / write_handoff 等工具");
+  if (mode === "write" && (rel === ".baton" || rel.startsWith(".baton/"))) {
+    throw new PermissionError("不能直接写 .baton/，请用 update_context / remember / write_handoff 等工具");
   }
   return { abs, rel };
 }

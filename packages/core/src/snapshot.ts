@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 
 const exec = promisify(execFile);
 
-const EXCLUDES = [".git/", ".workbench/", "node_modules/", ".env", ".env.*", "dist/", ".next/"];
+const EXCLUDES = [".git/", ".baton/", "node_modules/", ".env", ".env.*", "dist/", ".next/"];
 
 /** A git repository outside the user's own `.git`, with the workspace as work tree. */
 export class ShadowGit {
@@ -28,10 +28,10 @@ export class ShadowGit {
           maxBuffer: 64 * 1024 * 1024,
           env: {
             ...process.env,
-            GIT_AUTHOR_NAME: "workbench",
-            GIT_AUTHOR_EMAIL: "workbench@localhost",
-            GIT_COMMITTER_NAME: "workbench",
-            GIT_COMMITTER_EMAIL: "workbench@localhost",
+            GIT_AUTHOR_NAME: "baton",
+            GIT_AUTHOR_EMAIL: "baton@localhost",
+            GIT_COMMITTER_NAME: "baton",
+            GIT_COMMITTER_EMAIL: "baton@localhost",
           },
         },
       );

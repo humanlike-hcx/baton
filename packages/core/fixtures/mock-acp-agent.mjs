@@ -50,14 +50,14 @@ async function stream(sessionId, text) {
 }
 
 async function callBridge(session, tool, args) {
-  const server = session.mcpServers.find((s) => s.name === "workbench");
+  const server = session.mcpServers.find((s) => s.name === "baton");
   if (!server) return false;
   const env = Object.fromEntries((server.env ?? []).map((e) => [e.name, e.value]));
-  if (!env.WORKBENCH_URL) return false;
+  if (!env.BATON_URL) return false;
   try {
-    const res = await fetch(`${env.WORKBENCH_URL}/api/bridge/tool`, {
+    const res = await fetch(`${env.BATON_URL}/api/bridge/tool`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-workbench": "1", "x-workbench-token": env.WORKBENCH_TOKEN ?? "" },
+      headers: { "content-type": "application/json", "x-baton": "1", "x-baton-token": env.BATON_TOKEN ?? "" },
       body: JSON.stringify({ tool, args }),
     });
     return res.ok;
@@ -125,7 +125,7 @@ async function prompt(params) {
     ? { done: "（模拟）核对了改动。", verdict: "pass", next: "可以标记完成。" }
     : { done: `（模拟）写入了 ${files.join("、") || "无"}。`, files, next: "交给检查阶段。" };
   const viaBridge = await callBridge(session, "write_handoff", handoff);
-  await stream(params.sessionId, viaBridge ? "已通过 workbench MCP 写好交接。" : "完成。");
+  await stream(params.sessionId, viaBridge ? "已通过 baton MCP 写好交接。" : "完成。");
   return { stopReason: "end_turn" };
 }
 

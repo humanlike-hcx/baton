@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { post } from "@/lib/api";
 import { ROLE_LABEL, SOURCE_LABEL } from "@/lib/format";
 import { navigate } from "@/lib/router";
-import { useWorkbench } from "@/lib/store";
+import { useBaton } from "@/lib/store";
 import type { Role, Stage, Thread } from "@/lib/types";
 
 const START_STAGES: { value: Stage; label: string; hint: string }[] = [
@@ -19,7 +19,7 @@ const START_STAGES: { value: Stage; label: string; hint: string }[] = [
 ];
 
 export function NewThread() {
-  const { state } = useWorkbench();
+  const { state } = useBaton();
   const [title, setTitle] = useState("");
   const [task, setTask] = useState("");
   const [criteria, setCriteria] = useState<string[]>([""]);
@@ -86,7 +86,7 @@ export function NewThread() {
                   <Input
                     value={c}
                     onChange={(e) => setCriteria(criteria.map((x, j) => (j === i ? e.target.value : x)))}
-                    placeholder={i === 0 ? "例如：点击按钮后下载 workbench.json" : "再加一条"}
+                    placeholder={i === 0 ? "例如：点击按钮后下载 baton.json" : "再加一条"}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.nativeEvent.isComposing) {
                         e.preventDefault();

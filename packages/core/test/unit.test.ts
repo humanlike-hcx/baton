@@ -102,15 +102,15 @@ describe("permissions", () => {
   it("allows paths inside the workspace", () => {
     expect(resolveWorkspacePath(root, "src/a.ts", settings, "write").rel).toBe("src/a.ts");
   });
-  it("rejects traversal, symlink escapes, denylisted files and .workbench writes", () => {
+  it("rejects traversal, symlink escapes, denylisted files and .baton writes", () => {
     expect(() => resolveWorkspacePath(root, "../x", settings, "read")).toThrow(PermissionError);
     expect(() => resolveWorkspacePath(root, "/etc/passwd", settings, "read")).toThrow(PermissionError);
     expect(() => resolveWorkspacePath(root, "escape/passwd", settings, "read")).toThrow(/符号链接/);
     expect(() => resolveWorkspacePath(root, ".env", settings, "read")).toThrow(/拒绝/);
     expect(() => resolveWorkspacePath(root, "sub/.env.local", settings, "read")).toThrow(/拒绝/);
     expect(() => resolveWorkspacePath(root, ".git/config", settings, "read")).toThrow(/拒绝/);
-    expect(() => resolveWorkspacePath(root, ".workbench/CONTEXT.md", settings, "write")).toThrow(/\.workbench/);
-    expect(resolveWorkspacePath(root, ".workbench/CONTEXT.md", settings, "read").rel).toBe(".workbench/CONTEXT.md");
+    expect(() => resolveWorkspacePath(root, ".baton/CONTEXT.md", settings, "write")).toThrow(/\.baton/);
+    expect(resolveWorkspacePath(root, ".baton/CONTEXT.md", settings, "read").rel).toBe(".baton/CONTEXT.md");
   });
   it("applies shell allow/deny lists and agent overrides", () => {
     const a = agent({ id: "a", model: "m" });
@@ -250,7 +250,7 @@ describe("workspace, memory, lessons and briefing", () => {
     Workspace.open(root);
     const text = fs.readFileSync(path.join(root, "AGENTS.md"), "utf8");
     expect(text).toContain("Keep this.");
-    expect(text.match(/workbench:begin/g)).toHaveLength(1);
+    expect(text.match(/baton:begin/g)).toHaveLength(1);
     expect(ws.listAgents().length).toBeGreaterThan(3);
     expect(ws.listAgents().filter((a) => a.source === "demo").every((a) => !a.enabled)).toBe(true);
   });

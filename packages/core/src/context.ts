@@ -38,24 +38,24 @@ export function compileBriefing(input: BriefingInput): Briefing {
   const familyFile = `family-${family}.md`;
   const clean = role === "advisor";
   const sections: (BriefingSection | undefined)[] = [
-    section("base", "共用底座", ".workbench/rules/base.md", ws.readRule("base.md")),
-    section("role", `角色规则 · ${ROLE_LABEL[role]}`, `.workbench/rules/role-${role}.md`, ws.readRule(`role-${role}.md`)),
-    section("runtime", `运行时校准 · ${agent.runtime}`, `.workbench/rules/runtime-${agent.runtime}.md`, ws.readRule(`runtime-${agent.runtime}.md`)),
+    section("base", "共用底座", ".baton/rules/base.md", ws.readRule("base.md")),
+    section("role", `角色规则 · ${ROLE_LABEL[role]}`, `.baton/rules/role-${role}.md`, ws.readRule(`role-${role}.md`)),
+    section("runtime", `运行时校准 · ${agent.runtime}`, `.baton/rules/runtime-${agent.runtime}.md`, ws.readRule(`runtime-${agent.runtime}.md`)),
     fs.existsSync(ws.path("rules", familyFile))
-      ? section("family", `模型家族 · ${family}`, `.workbench/rules/${familyFile}`, ws.readRule(familyFile))
+      ? section("family", `模型家族 · ${family}`, `.baton/rules/${familyFile}`, ws.readRule(familyFile))
       : undefined,
     section(
       "agent",
       "职责说明",
-      `.workbench/agents/${agent.id}.md`,
+      `.baton/agents/${agent.id}.md`,
       `# 你是谁\n${agent.name}（运行时 ${agent.runtime}，模型 ${agent.model}）\n\n${agent.body}`,
     ),
-    section("context", "房间上下文", ".workbench/CONTEXT.md", ws.readContext()),
+    section("context", "房间上下文", ".baton/CONTEXT.md", ws.readContext()),
     (() => {
       const pinned = listMemory(ws).filter((m) => m.pinned && m.status === "active");
-      return section("memory", "置顶记忆", ".workbench/memory/", pinned.length ? `# 置顶记忆\n${pinned.map((m) => `- [${m.id}] ${m.text}`).join("\n")}` : "");
+      return section("memory", "置顶记忆", ".baton/memory/", pinned.length ? `# 置顶记忆\n${pinned.map((m) => `- [${m.id}] ${m.text}`).join("\n")}` : "");
     })(),
-    !clean && thread ? section("thread", "线程摘要与最近交接", `.workbench/handoffs/${thread.id}/`, threadDigest(thread)) : undefined,
+    !clean && thread ? section("thread", "线程摘要与最近交接", `.baton/handoffs/${thread.id}/`, threadDigest(thread)) : undefined,
     !clean && input.diffSummary ? section("diff", "自上次运行以来的改动", "shadow git", `# 自你上次运行以来的文件改动\n${input.diffSummary}`) : undefined,
     section("task", "任务卡", "harness", taskCard(input)),
   ];

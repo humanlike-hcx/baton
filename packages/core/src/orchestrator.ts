@@ -723,7 +723,7 @@ export class Orchestrator {
     return compileBriefing({ ws: this.ws, agent, role, thread: role === "advisor" ? undefined : thread, task, extra, diffSummary });
   }
 
-  /** Tool calls from the MCP server or the `wb` CLI. */
+  /** Tool calls from the MCP server or the `baton` CLI. */
   async bridgeTool(token: string | undefined, toolName: string, args: unknown): Promise<ToolOutput> {
     const tool = MCP_TOOLS.find((t) => t.name === toolName);
     if (!tool) return { text: `未知工具：${toolName}`, isError: true };

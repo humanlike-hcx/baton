@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { del, post, put } from "@/lib/api";
 import { kb } from "@/lib/format";
 import { navigate } from "@/lib/router";
-import { useWorkbench } from "@/lib/store";
+import { useBaton } from "@/lib/store";
 import type { CheckResult, WorkspaceSettings } from "@/lib/types";
 
 function errorToast(e: unknown) {
@@ -60,7 +60,7 @@ function useBusy() {
 }
 
 function AccountsTab() {
-  const { state, refresh } = useWorkbench();
+  const { state, refresh } = useBaton();
   const { busy, run } = useBusy();
   const [manual, setManual] = useState("");
   const [deepseekKey, setDeepseekKey] = useState("");
@@ -91,7 +91,7 @@ function AccountsTab() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        用你已有的订阅登录，不用 API key（DeepSeek 除外）。凭据只保存在本机 <code className="rounded bg-muted px-1">~/.workbench/credentials.json</code>（权限 0600），不会发给浏览器或工具。
+        用你已有的订阅登录，不用 API key（DeepSeek 除外）。凭据只保存在本机 <code className="rounded bg-muted px-1">~/.baton/credentials.json</code>（权限 0600），不会发给浏览器或工具。
       </p>
 
       <Section
@@ -240,7 +240,7 @@ function AccountsTab() {
 }
 
 function WorkspaceTab() {
-  const { state, refresh } = useWorkbench();
+  const { state, refresh } = useBaton();
   const [target, setTarget] = useState("");
   const { busy, run } = useBusy();
   if (!state) return null;
@@ -256,14 +256,14 @@ function WorkspaceTab() {
 
   return (
     <div className="space-y-4">
-      <Section title="当前工作区" description="所有 agent 在这个目录里读写同一批文件。工作台的状态保存在其中的 .workbench/ 目录。">
+      <Section title="当前工作区" description="所有 agent 在这个目录里读写同一批文件。工作台的状态保存在其中的 .baton/ 目录。">
         <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2">
           <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate font-mono text-xs">{state.workspace.root}</span>
           {state.workspace.demo && <Badge variant="secondary">演示</Badge>}
         </div>
       </Section>
-      <Section title="打开其他目录" description="填本机上的绝对路径，比如你的项目仓库。第一次打开会初始化 .workbench/、CONTEXT.md、AGENTS.md 里的工作台段落和 .cursor/mcp.json。">
+      <Section title="打开其他目录" description="填本机上的绝对路径，比如你的项目仓库。第一次打开会初始化 .baton/、CONTEXT.md、AGENTS.md 里的工作台段落和 .cursor/mcp.json。">
         <div className="flex flex-col gap-2 sm:flex-row">
           <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="~/code/my-project" className="font-mono text-xs" />
           <div className="flex gap-2">
@@ -294,7 +294,7 @@ function WorkspaceTab() {
 }
 
 function useSettingsDraft() {
-  const { state, refresh } = useWorkbench();
+  const { state, refresh } = useBaton();
   const [draft, setDraft] = useState<WorkspaceSettings>();
   const [saving, setSaving] = useState(false);
   useEffect(() => {
@@ -527,7 +527,7 @@ function PermissionsTab() {
           </div>
         </div>
       </Section>
-      <Section title="禁止访问的路径" description="glob 写法，相对工作区。agent 读写都会被拒绝；.workbench/ 本身总是只读。">
+      <Section title="禁止访问的路径" description="glob 写法，相对工作区。agent 读写都会被拒绝；.baton/ 本身总是只读。">
         <ListEditor value={draft.permissions.denyPaths} onChange={(v) => perms({ denyPaths: v })} placeholder={".env*\n**/*.pem\nsecrets/**"} />
       </Section>
       <SaveBar {...bar} />
@@ -544,7 +544,7 @@ const TABS = [
 ];
 
 export function SettingsPage({ tab }: { tab?: string }) {
-  const { state, error } = useWorkbench();
+  const { state, error } = useBaton();
   const active = TABS.some((t) => t.value === tab) ? tab! : "accounts";
   return (
     <div className="h-full overflow-y-auto">

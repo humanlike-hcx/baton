@@ -5,19 +5,19 @@ import path from "node:path";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import { readJson, writeFileAtomic } from "./util.ts";
 
-export function workbenchHome(): string {
-  return process.env.WORKBENCH_HOME ?? path.join(os.homedir(), ".workbench");
+export function batonHome(): string {
+  return process.env.BATON_HOME ?? path.join(os.homedir(), ".baton");
 }
 
 /**
- * Credentials live in ~/.workbench/credentials.json (mode 0600). They never reach the
+ * Credentials live in ~/.baton/credentials.json (mode 0600). They never reach the
  * browser, tools, or shell environments.
  */
 export class FileCredentialStore implements CredentialStore {
   private queue: Promise<unknown> = Promise.resolve();
   readonly file: string;
 
-  constructor(home = workbenchHome()) {
+  constructor(home = batonHome()) {
     this.file = path.join(home, "credentials.json");
   }
 
@@ -66,7 +66,7 @@ export class FileCredentialStore implements CredentialStore {
 }
 
 /** Stable per-installation UUID; Sign in with ChatGPT requires one. */
-export function deviceId(home = workbenchHome()): string {
+export function deviceId(home = batonHome()): string {
   const file = path.join(home, "device.json");
   const saved = readJson<{ id?: string }>(file, {});
   if (saved.id) return saved.id;

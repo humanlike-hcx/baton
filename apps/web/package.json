@@ -1,5 +1,5 @@
 {
-  "name": "@workbench/web",
+  "name": "@baton/web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -12,7 +12,7 @@
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",
     "@tailwindcss/vite": "^4.3.3",
-    "@workbench/core": "workspace:*",
+    "@baton/core": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.0",
     "lucide-react": "^1.61.0",

@@ -9,7 +9,7 @@ import { ThreadsHome } from "@/components/threads-home";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useRoute, type Route } from "@/lib/router";
-import { WorkbenchProvider } from "@/lib/store";
+import { BatonProvider } from "@/lib/store";
 
 function Page({ route }: { route: Route }) {
   switch (route.page) {
@@ -31,13 +31,13 @@ function Page({ route }: { route: Route }) {
 export default function App() {
   const route = useRoute();
   return (
-    <WorkbenchProvider>
+    <BatonProvider>
       <TooltipProvider>
         <AppShell route={route}>
           <Page route={route} />
         </AppShell>
         <Toaster position="top-center" richColors />
       </TooltipProvider>
-    </WorkbenchProvider>
+    </BatonProvider>
   );
 }

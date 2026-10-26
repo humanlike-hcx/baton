@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Eye, Loader2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { familyLabel, modelFamily, validateAgentRoute } from "@workbench/core/families";
+import { familyLabel, modelFamily, validateAgentRoute } from "@baton/core/families";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api, del, put } from "@/lib/api";
 import { kb, ROLE_LABEL, RUNTIME_LABEL, SOURCE_LABEL } from "@/lib/format";
 import { href } from "@/lib/router";
-import { useWorkbench } from "@/lib/store";
+import { useBaton } from "@/lib/store";
 import type { AgentCard, AgentView, Briefing, ModelOption, ModelsResponse, Role } from "@/lib/types";
 
 const ROLES: Role[] = ["plan", "implement", "review", "advisor"];
@@ -194,7 +194,7 @@ function AgentEditor({ agent, isNew, open, onOpenChange, demo }: { agent: AgentC
   };
 
   const remove = async () => {
-    if (!window.confirm(`删除 ${draft.name}？它的卡片文件会从 .workbench/agents 里移除。`)) return;
+    if (!window.confirm(`删除 ${draft.name}？它的卡片文件会从 .baton/agents 里移除。`)) return;
     try {
       await del(`/api/agents/${agent.id}`);
       toast.success("已删除");
@@ -485,7 +485,7 @@ export function BriefingInspector({ agent, onOpenChange }: { agent?: AgentView; 
 }
 
 export function AgentsPage() {
-  const { state, error } = useWorkbench();
+  const { state, error } = useBaton();
   const [editing, setEditing] = useState<{ agent: AgentCard; isNew: boolean }>();
   const [inspecting, setInspecting] = useState<AgentView>();
 

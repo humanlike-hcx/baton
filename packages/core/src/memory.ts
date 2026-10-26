@@ -181,5 +181,5 @@ export function saveHandoff(ws: Workspace, h: Handoff): string {
   const rel = `handoffs/${h.threadId}/${h.runId}.md`;
   const { done: _d, ...meta } = h;
   writeFileAtomic(ws.path(rel), stringifyFrontmatter({ ...meta, files: h.files }, handoffMarkdown(h)));
-  return `.workbench/${rel}`;
+  return `.baton/${rel}`;
 }

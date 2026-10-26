@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { del, post } from "@/lib/api";
 import { ROLE_LABEL, STAGES, STAGE_LABEL, STATUS_LABEL, STATUS_TONE, kb, tokens } from "@/lib/format";
 import { navigate } from "@/lib/router";
-import { useThread, useWorkbench } from "@/lib/store";
+import { useThread, useBaton } from "@/lib/store";
 import type { Thread } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { DiffDialog } from "./diff-dialog";
@@ -124,7 +124,7 @@ function composerHint(thread: Thread): string {
 
 export function ThreadView({ threadId }: { threadId: string }) {
   const { thread, error, loading } = useThread(threadId);
-  const { state } = useWorkbench();
+  const { state } = useBaton();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [diff, setDiff] = useState<{ runId: string; title: string }>();

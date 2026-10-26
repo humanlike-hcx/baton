@@ -1,5 +1,5 @@
 {
-  "name": "workbench",
+  "name": "baton",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.33.4",
@@ -7,9 +7,9 @@
     "node": ">=22.19"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @workbench/server --filter @workbench/web dev",
-    "build": "pnpm --filter @workbench/web build",
-    "start": "pnpm --filter @workbench/server start",
+    "dev": "pnpm --parallel --filter @baton/server --filter @baton/web dev",
+    "build": "pnpm --filter @baton/web build",
+    "start": "pnpm --filter @baton/server start",
     "test": "vitest run",
     "typecheck": "pnpm -r --no-bail typecheck"
   },

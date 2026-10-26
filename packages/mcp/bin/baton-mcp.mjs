@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { callTool } from "./bridge.mjs";
 
-const server = new McpServer({ name: "workbench", version: "0.1.0" });
+const server = new McpServer({ name: "baton", version: "0.1.0" });
 
 const reply = async (tool, args) => {
   const out = await callTool(tool, args);

@@ -18,7 +18,7 @@ export class Workspace {
 
   private constructor(root: string) {
     this.root = root;
-    this.dir = path.join(root, ".workbench");
+    this.dir = path.join(root, ".baton");
   }
 
   static open(root: string, options: { demo?: boolean } = {}): Workspace {
@@ -29,7 +29,7 @@ export class Workspace {
   }
 
   static isInitialized(root: string): boolean {
-    return fs.existsSync(path.join(root, ".workbench", "workspace.json"));
+    return fs.existsSync(path.join(root, ".baton", "workspace.json"));
   }
 
   path(...parts: string[]): string {
@@ -70,11 +70,11 @@ export class Workspace {
     if (next !== current) writeFileAtomic(file, next);
   }
 
-  /** Register the workbench MCP server for Cursor, keeping other servers intact. */
+  /** Register the baton MCP server for Cursor, keeping other servers intact. */
   ensureCursorMcp(server: { command: string; args: string[]; env?: Record<string, string> }): void {
     const file = path.join(this.root, ".cursor", "mcp.json");
     const config = readJson<{ mcpServers?: Record<string, unknown> }>(file, {});
-    config.mcpServers = { ...(config.mcpServers ?? {}), workbench: server };
+    config.mcpServers = { ...(config.mcpServers ?? {}), baton: server };
     writeFileAtomic(file, `${JSON.stringify(config, null, 2)}\n`);
   }
 

@@ -13,18 +13,18 @@ import {
   cursorStatus,
   deviceId,
   readJson,
-  workbenchHome,
+  batonHome,
   writeFileAtomic,
   type AgentCard,
   type AuthStatus,
   type CursorModel,
   type CursorStatus,
   type OrchestratorEvent,
-} from "@workbench/core";
+} from "@baton/core";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(here, "../../..");
-export const MCP_BIN = path.join(REPO_ROOT, "packages/mcp/bin/workbench-mcp.mjs");
+export const MCP_BIN = path.join(REPO_ROOT, "packages/mcp/bin/baton-mcp.mjs");
 export const MOCK_CURSOR = path.join(REPO_ROOT, "packages/core/fixtures/mock-acp-agent.mjs");
 
 interface Persisted {
@@ -42,7 +42,7 @@ interface ChatGptLogin {
 }
 
 export class AppState {
-  readonly home = workbenchHome();
+  readonly home = batonHome();
   readonly credentials = new FileCredentialStore(this.home);
   readonly pi = new PiExecutor({ credentials: this.credentials, agentDir: path.join(this.home, "pi-agent") });
   readonly acp = new AcpExecutor();
@@ -76,11 +76,11 @@ export class AppState {
   }
 
   async init(): Promise<void> {
-    const envWs = process.env.WORKBENCH_WORKSPACE;
+    const envWs = process.env.BATON_WORKSPACE;
     const demoDir = path.join(this.home, "demo-workspace");
     const target = envWs ? path.resolve(envWs) : this.persisted.lastWorkspace && fs.existsSync(this.persisted.lastWorkspace) ? this.persisted.lastWorkspace : demoDir;
     if (target === demoDir) fs.mkdirSync(demoDir, { recursive: true });
-    this.openWorkspace(target, { demo: target === demoDir || process.env.WORKBENCH_DEMO === "1" });
+    this.openWorkspace(target, { demo: target === demoDir || process.env.BATON_DEMO === "1" });
     await this.refreshAuth(true);
   }
 
@@ -94,7 +94,7 @@ export class AppState {
     if (!fs.statSync(resolved).isDirectory()) throw new Error(`不是目录：${resolved}`);
     const demo = options.demo ?? (path.resolve(resolved) === path.join(this.home, "demo-workspace"));
     const ws = Workspace.open(resolved, { demo });
-    ws.ensureCursorMcp({ command: process.execPath, args: [MCP_BIN], env: { WORKBENCH_URL: this.baseUrl } });
+    ws.ensureCursorMcp({ command: process.execPath, args: [MCP_BIN], env: { BATON_URL: this.baseUrl } });
     this.demo = demo;
     this.orchestrator = new Orchestrator({
       ws,
@@ -102,7 +102,7 @@ export class AppState {
       acp: this.acp,
       available: (agent) => this.available(agent),
       onEvent: (event: OrchestratorEvent) => this.broadcast(event),
-      mcpLaunch: (token) => ({ command: process.execPath, args: [MCP_BIN], env: { WORKBENCH_URL: this.baseUrl, WORKBENCH_TOKEN: token } }),
+      mcpLaunch: (token) => ({ command: process.execPath, args: [MCP_BIN], env: { BATON_URL: this.baseUrl, BATON_TOKEN: token } }),
       summarize: (prompt) => this.summarize(prompt),
     });
     this.persisted.lastWorkspace = ws.root;
@@ -178,7 +178,7 @@ export class AppState {
               p.signal?.addEventListener("abort", () => rej(new Error("aborted")), { once: true });
             }),
         },
-        { getDeviceId: () => deviceId(this.home), agentName: "Workbench" },
+        { getDeviceId: () => deviceId(this.home), agentName: "Baton" },
       );
       done.then(
         async () => {

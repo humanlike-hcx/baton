@@ -14,9 +14,9 @@ export type {
   ThreadStatus,
   TimelineItem,
   WorkspaceSettings,
-} from "@workbench/core/types";
+} from "@baton/core/types";
 
-import type { AgentCard, AuthStatus, Stage, ThreadStatus, WorkspaceSettings } from "@workbench/core/types";
+import type { AgentCard, AuthStatus, Stage, ThreadStatus, WorkspaceSettings } from "@baton/core/types";
 
 export interface AgentView extends AgentCard {
   available: boolean;

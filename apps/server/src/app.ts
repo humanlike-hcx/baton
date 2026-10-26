@@ -15,7 +15,7 @@ import {
   type Stage,
   type Thread,
   type WorkspaceSettings,
-} from "@workbench/core";
+} from "@baton/core";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { MOCK_CURSOR, REPO_ROOT, type AppState } from "./state.ts";
@@ -51,8 +51,8 @@ export function createApp(state: AppState): Hono {
   app.use("*", async (c, next) => {
     const host = c.req.header("host") ?? "";
     if (!ALLOWED_HOSTS.test(host)) return c.json({ error: "forbidden host" }, 403);
-    if (c.req.path.startsWith("/api/") && c.req.method !== "GET" && c.req.header("x-workbench") !== "1") {
-      return c.json({ error: "缺少 X-Workbench 请求头" }, 403);
+    if (c.req.path.startsWith("/api/") && c.req.method !== "GET" && c.req.header("x-baton") !== "1") {
+      return c.json({ error: "缺少 X-Baton 请求头" }, 403);
     }
     await next();
   });
@@ -259,11 +259,11 @@ export function createApp(state: AppState): Hono {
   });
   app.post("/api/auth/cursor/login", async (c) => c.json({ url: await state.startCursorLogin() }));
 
-  // ---------- MCP / wb bridge ----------
+  // ---------- MCP / baton bridge ----------
 
   app.post("/api/bridge/tool", async (c) => {
     const { tool, args } = await body<{ tool: string; args?: unknown }>(c);
-    const token = c.req.header("x-workbench-token") || undefined;
+    const token = c.req.header("x-baton-token") || undefined;
     const out = await state.orchestrator.bridgeTool(token, tool, args ?? {});
     return c.json(out, out.isError ? 422 : 200);
   });
@@ -275,7 +275,7 @@ export function createApp(state: AppState): Hono {
     app.use("/*", serveStatic({ root: path.relative(process.cwd(), dist) }));
     app.get("*", (c) => c.html(fs.readFileSync(path.join(dist, "index.html"), "utf8")));
   } else {
-    app.get("/", (c) => c.text("Workbench API is running. Open the web app (pnpm dev) at http://127.0.0.1:47320"));
+    app.get("/", (c) => c.text("Baton API is running. Open the web app (pnpm dev) at http://127.0.0.1:47320"));
   }
 
   return app;

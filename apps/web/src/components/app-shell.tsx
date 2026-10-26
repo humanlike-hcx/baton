@@ -7,7 +7,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { STAGE_LABEL, STATUS_LABEL, timeAgo } from "@/lib/format";
 import { href, type Route } from "@/lib/router";
-import { useWorkbench } from "@/lib/store";
+import { useBaton } from "@/lib/store";
 
 const NAV: { route: Route; label: string; icon: typeof Bot; match: Route["page"][] }[] = [
   { route: { page: "threads" }, label: "线程", icon: MessagesSquare, match: ["threads", "new"] },
@@ -26,7 +26,7 @@ const STATUS_DOT: Record<string, string> = {
 };
 
 function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void }) {
-  const { state, connected } = useWorkbench();
+  const { state, connected } = useBaton();
   const activeThread = route.page === "threads" ? route.threadId : undefined;
   const auth = state?.auth;
   const accounts = [
@@ -41,7 +41,7 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
           <Bot className="size-4.5" />
         </div>
         <div className="min-w-0">
-          <div className="text-sm font-semibold leading-tight">Workbench</div>
+          <div className="text-sm font-semibold leading-tight">Baton</div>
           <div className="text-xs text-muted-foreground">个人 agent 工作台</div>
         </div>
       </div>
@@ -161,7 +161,7 @@ export function AppShell({ route, children }: { route: Route; children: ReactNod
           <Button variant="ghost" size="icon" onClick={() => setOpen(true)} aria-label="打开导航">
             <Menu />
           </Button>
-          <span className="text-sm font-semibold">Workbench</span>
+          <span className="text-sm font-semibold">Baton</span>
         </header>
         <main className="min-h-0 flex-1">{children}</main>
       </div>

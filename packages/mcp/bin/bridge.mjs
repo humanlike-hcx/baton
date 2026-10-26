@@ -1,6 +1,6 @@
-const BASE = process.env.WORKBENCH_URL ?? "http://127.0.0.1:47321";
+const BASE = process.env.BATON_URL ?? "http://127.0.0.1:47321";
 
-/** Calls a workbench tool through the local server; the server enforces the same permissions as native tools. */
+/** Calls a baton tool through the local server; the server enforces the same permissions as native tools. */
 export async function callTool(tool, args) {
   let res;
   try {
@@ -8,8 +8,8 @@ export async function callTool(tool, args) {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-workbench": "1",
-        ...(process.env.WORKBENCH_TOKEN ? { "x-workbench-token": process.env.WORKBENCH_TOKEN } : {}),
+        "x-baton": "1",
+        ...(process.env.BATON_TOKEN ? { "x-baton-token": process.env.BATON_TOKEN } : {}),
       },
       body: JSON.stringify({ tool, args }),
     });

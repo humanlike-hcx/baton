@@ -1,4 +1,4 @@
-# Workbench 设计文档
+# Baton 设计文档
 
 个人 agent 工作台：把已订阅的模型登录进来，让多个 agent 在同一个工作区里协作，共用一套上下文、记忆和工具。第一版是单人、单机、本地网页，结构按以后包成 Electron 桌面应用设计。
 
@@ -16,8 +16,8 @@
 
 ## 2. 核心概念
 
-- **工作区**：一个本地目录。所有 agent 读写同一份文件。工作台的状态放在 `<工作区>/.workbench/`。
-- **agent**：角色 + 运行时 + 模型。定义在 `.workbench/agents/*.md` 的 frontmatter（能力卡）。
+- **工作区**：一个本地目录。所有 agent 读写同一份文件。工作台的状态放在 `<工作区>/.baton/`。
+- **agent**：角色 + 运行时 + 模型。定义在 `.baton/agents/*.md` 的 frontmatter（能力卡）。
 - **线程**：一件事。按阶段推进：方案 → 实现 → 检查 → 完成，检查可以退回实现。
 - **运行**：某个 agent 在某个线程里的一次执行。
 - **交接**：每次运行结束时写回的记录：做了什么、改了哪些文件、还剩什么、建议下一步。
@@ -26,8 +26,8 @@
 
 ```
 AGENTS.md                 # 公共规则，Pi 和 Cursor 都会读；由工作台维护其中的标记段
-.cursor/mcp.json          # 工作台写入 workbench MCP 服务
-.workbench/
+.cursor/mcp.json          # 工作台写入 baton MCP 服务
+.baton/
   workspace.json          # 工作区设置：检查命令、权限默认值、上限
   CONTEXT.md              # 房间上下文，约 2k token 预算
   rules/
@@ -130,24 +130,24 @@ agent 只提议目标阶段，harness 决定交给谁。
 出口：
 
 - Pi：作为自定义工具注入，不加载 Pi 的默认资源发现。
-- Cursor：本地 MCP 服务 `workbench-mcp`，只暴露 4 个工具：`read_context`、`memory_search`、`remember`、`write_handoff`。另有同等功能的 `wb` 命令行。
+- Cursor：本地 MCP 服务 `baton-mcp`，只暴露 4 个工具：`read_context`、`memory_search`、`remember`、`write_handoff`。另有同等功能的 `baton` 命令行。
 
 shell 工具：单独返回退出码；截断时保留开头和结尾，只砍中间，保留 stderr；每个工具有输出上限；时间线显示每次调用占用的 token 估算。
 
 ## 9. 权限
 
-1. 路径边界：解析真实路径，越出工作区或经符号链接逃逸一律拒绝；`.env*`、`.git/`、`.workbench/shadow.git`、凭证文件默认拒绝。
+1. 路径边界：解析真实路径，越出工作区或经符号链接逃逸一律拒绝；`.env*`、`.git/`、`.baton/shadow.git`、凭证文件默认拒绝。
 2. 默认策略：读放行；写工作区放行（每次写运行前有快照）；执行命令询问，可设白名单和黑名单；联网询问。每个 agent 可以覆盖。
 3. 拦截点：Pi 工具在执行前统一过权限判断；Cursor 的 `session/request_permission` 转到工作台审批；MCP 工具在服务端过同一套判断。启动 Cursor 不加 `--force`。
 4. 审批卡预览 diff 或完整命令，超时按拒绝处理。
-5. 凭证存 `~/.workbench/credentials.json`（0600），不发到浏览器、不给工具读；shell 环境变量去掉凭证。Cursor 登录由它的 CLI 保管。
+5. 凭证存 `~/.baton/credentials.json`（0600），不发到浏览器、不给工具读；shell 环境变量去掉凭证。Cursor 登录由它的 CLI 保管。
 6. 每次工具调用写入 `audit.jsonl`。
 
 局限：shell 以本人系统用户身份运行，第一版没有容器隔离。
 
 ## 10. 快照与回滚
 
-每次写运行开始前，用影子 Git（`.workbench/shadow.git`，work tree 为工作区）提交一次快照。运行详情页显示这次运行的 diff，可以一键回滚到运行前。
+每次写运行开始前，用影子 Git（`.baton/shadow.git`，work tree 为工作区）提交一次快照。运行详情页显示这次运行的 diff，可以一键回滚到运行前。
 
 ## 11. 架构
 
@@ -155,12 +155,12 @@ shell 工具：单独返回退出码；截断时保留开头和结尾，只砍�
 apps/web        Vite + React + shadcn/ui 单页应用，只通过 HTTP/WebSocket 与服务通信
 apps/server     本地服务：HTTP + WebSocket，凭证、登录、审批、运行调度
 packages/core   harness：工作区存储、规则拼装、记忆、路由、工具注册表、权限、执行器
-packages/mcp    workbench-mcp（stdio）与 wb 命令行，回调本地服务
+packages/mcp    baton-mcp（stdio）与 baton 命令行，回调本地服务
 ```
 
 执行器：
 
-- **Pi 执行器**：`@earendil-works/pi-coding-agent` SDK 的 `createAgentSession`，自定义模型运行时与工具，会话 JSONL 存到 `.workbench/sessions/`。
+- **Pi 执行器**：`@earendil-works/pi-coding-agent` SDK 的 `createAgentSession`，自定义模型运行时与工具，会话 JSONL 存到 `.baton/sessions/`。
 - **ACP 执行器**：启动 `agent --model <id> acp`，按 ACP 流程 `initialize → session/new → session/prompt`，把 `session/update` 转成运行事件，把 `session/request_permission` 转给审批。
 - **演示执行器**：pi-ai 的假模型，不需要任何账号即可跑通整条流程，用于开发与测试。
 

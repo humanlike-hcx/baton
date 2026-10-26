@@ -6,7 +6,7 @@ const SECRET_ENV = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE|SES
 export function scrubbedEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (SECRET_ENV.test(k) || k.startsWith("WORKBENCH_")) continue;
+    if (SECRET_ENV.test(k) || k.startsWith("BATON_")) continue;
     env[k] = v;
   }
   return { ...env, ...extra };

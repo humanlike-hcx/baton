@@ -1,17 +1,17 @@
 {
-  "name": "@workbench/server",
+  "name": "@baton/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --clear-screen=false --ignore '**/.workbench/**' src/main.ts",
+    "dev": "tsx watch --clear-screen=false --ignore '**/.baton/**' src/main.ts",
     "start": "NODE_ENV=production tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.4.0",
     "@hono/node-server": "^2.1.5",
-    "@workbench/core": "workspace:*",
+    "@baton/core": "workspace:*",
     "hono": "^4.13.14",
     "ws": "^8.22.0"
   },
