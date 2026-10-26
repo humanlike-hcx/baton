@@ -90,7 +90,11 @@ export function createApp(state: AppState): Hono {
     if (!target?.trim()) bad("请填写目录");
     const expanded = target.trim().replace(/^~(?=$|\/)/, process.env.HOME ?? "~");
     if (path.resolve(expanded) === REPO_ROOT) bad("不能把工作台自己的源码目录当作工作区");
-    state.openWorkspace(expanded, { create });
+    try {
+      state.openWorkspace(expanded, { create });
+    } catch (error) {
+      bad((error as Error).message);
+    }
     await state.refreshAuth(true);
     return c.json({ ok: true });
   });
@@ -153,7 +157,11 @@ export function createApp(state: AppState): Hono {
   });
   app.patch("/api/memory/:id", async (c) => {
     const patch = await body<{ pinned?: boolean; status?: "active" | "superseded" }>(c);
-    return c.json(updateMemory(state.ws, c.req.param("id"), patch));
+    try {
+      return c.json(updateMemory(state.ws, c.req.param("id"), patch));
+    } catch (error) {
+      bad((error as Error).message);
+    }
   });
 
   app.get("/api/lessons", (c) => c.json(listLessons(state.ws)));

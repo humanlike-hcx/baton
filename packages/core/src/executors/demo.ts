@@ -71,8 +71,12 @@ function relayScript(role: Role, thread: Thread | undefined, prompt: string, tit
   const wantsSendBack = /退回/.test(thread?.task ?? "") && (thread?.sendBacks ?? 0) === 0;
 
   if (role === "plan") {
+    const convention = /写进上下文[:：]\s*(.+)/.exec(thread?.task ?? "")?.[1]?.trim();
     return [
       fauxAssistantMessage([fauxText("先看一下房间上下文和已有记忆。"), fauxToolCall("read_context", {}), fauxToolCall("memory_search", { query: title })], toolUse),
+      ...(convention
+        ? [fauxAssistantMessage([fauxText("这条是长期约定，写进房间上下文。"), fauxToolCall("update_context", { content: `# 房间上下文\n\n## 约定\n- ${convention}\n` })], toolUse)]
+        : []),
       fauxAssistantMessage(
         [
           fauxText(`方案：在 \`${note}\` 写一份说明，包含背景、做法和验证方式；检查阶段逐条对照验收标准。`),

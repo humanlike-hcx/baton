@@ -64,6 +64,7 @@ function AccountsTab() {
   const { busy, run } = useBusy();
   const [manual, setManual] = useState("");
   const [deepseekKey, setDeepseekKey] = useState("");
+  const keyMalformed = deepseekKey.trim() !== "" && !/^sk-[A-Za-z0-9_-]{16,}$/.test(deepseekKey.trim());
   const [cursorCommand, setCursorCommand] = useState("");
   const auth = state?.auth;
   const settings = state?.settings;
@@ -217,21 +218,32 @@ function AccountsTab() {
             移除 key
           </Button>
         ) : (
-          <div className="flex gap-2">
-            <Input type="password" value={deepseekKey} onChange={(e) => setDeepseekKey(e.target.value)} placeholder="sk-…" autoComplete="off" className="font-mono" />
-            <Button
-              disabled={!deepseekKey.trim() || busy === "ds"}
-              onClick={() =>
-                run("ds", async () => {
-                  await post("/api/auth/deepseek", { key: deepseekKey });
-                  setDeepseekKey("");
-                  await refresh();
-                  toast.success("已保存 DeepSeek key");
-                })
-              }
-            >
-              保存
-            </Button>
+          <div className="space-y-1.5">
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                value={deepseekKey}
+                onChange={(e) => setDeepseekKey(e.target.value)}
+                placeholder="sk-…"
+                autoComplete="off"
+                aria-invalid={keyMalformed}
+                className="font-mono"
+              />
+              <Button
+                disabled={!deepseekKey.trim() || keyMalformed || busy === "ds"}
+                onClick={() =>
+                  run("ds", async () => {
+                    await post("/api/auth/deepseek", { key: deepseekKey });
+                    setDeepseekKey("");
+                    await refresh();
+                    toast.success("已保存 DeepSeek key");
+                  })
+                }
+              >
+                保存
+              </Button>
+            </div>
+            {keyMalformed && <p className="text-xs text-destructive">格式不对：DeepSeek key 以 sk- 开头，后面至少 16 位字母、数字、- 或 _。</p>}
           </div>
         )}
       </Section>
