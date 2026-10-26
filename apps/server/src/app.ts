@@ -1,0 +1,282 @@
+import fs from "node:fs";
+import path from "node:path";
+import { serveStatic } from "@hono/node-server/serve-static";
+import {
+  listLessons,
+  listMemory,
+  recordLesson,
+  remember,
+  runChecks,
+  updateLesson,
+  updateMemory,
+  validateAgentRoute,
+  type AgentCard,
+  type Role,
+  type Stage,
+  type Thread,
+  type WorkspaceSettings,
+} from "@workbench/core";
+import { Hono, type Context } from "hono";
+import { HTTPException } from "hono/http-exception";
+import { MOCK_CURSOR, REPO_ROOT, type AppState } from "./state.ts";
+
+const ALLOWED_HOSTS = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
+
+function threadSummary(t: Thread) {
+  return { id: t.id, title: t.title, stage: t.stage, status: t.status, updatedAt: t.updatedAt, pending: t.pending?.title, runs: t.runs.length };
+}
+
+async function body<T>(c: Context): Promise<T> {
+  try {
+    return (await c.req.json()) as T;
+  } catch {
+    throw new HTTPException(400, { message: "请求体不是合法 JSON" });
+  }
+}
+
+function bad(message: string): never {
+  throw new HTTPException(400, { message });
+}
+
+export function createApp(state: AppState): Hono {
+  const app = new Hono();
+
+  app.onError((err, c) => {
+    if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
+    console.error(err);
+    return c.json({ error: err.message || "服务出错" }, 500);
+  });
+
+  // DNS-rebinding and CSRF protection: only local Host headers, and a custom header on writes.
+  app.use("*", async (c, next) => {
+    const host = c.req.header("host") ?? "";
+    if (!ALLOWED_HOSTS.test(host)) return c.json({ error: "forbidden host" }, 403);
+    if (c.req.path.startsWith("/api/") && c.req.method !== "GET" && c.req.header("x-workbench") !== "1") {
+      return c.json({ error: "缺少 X-Workbench 请求头" }, 403);
+    }
+    await next();
+  });
+
+  // ---------- state & workspace ----------
+
+  app.get("/api/state", async (c) => {
+    await state.refreshAuth();
+    const ws = state.ws;
+    return c.json({
+      workspace: { root: ws.root, name: ws.settings().name, demo: state.demo },
+      recent: state.recent(),
+      auth: state.authStatus(),
+      settings: ws.settings(),
+      agents: ws.listAgents().map((a) => ({ ...a, available: state.available(a), routeError: validateAgentRoute(a) })),
+      threads: state.orchestrator.listThreads().map(threadSummary),
+      mockCursorCommand: `node ${MOCK_CURSOR}`,
+    });
+  });
+
+  app.post("/api/workspace/open", async (c) => {
+    const { path: target, create } = await body<{ path: string; create?: boolean }>(c);
+    if (!target?.trim()) bad("请填写目录");
+    const expanded = target.trim().replace(/^~(?=$|\/)/, process.env.HOME ?? "~");
+    if (path.resolve(expanded) === REPO_ROOT) bad("不能把工作台自己的源码目录当作工作区");
+    state.openWorkspace(expanded, { create });
+    await state.refreshAuth(true);
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/settings", (c) => c.json(state.ws.settings()));
+  app.put("/api/settings", async (c) => {
+    const next = await body<WorkspaceSettings>(c);
+    const current = state.ws.settings();
+    const merged: WorkspaceSettings = {
+      ...current,
+      ...next,
+      limits: { ...current.limits, ...next.limits },
+      confirm: { ...current.confirm, ...next.confirm },
+      advisor: { ...current.advisor, ...next.advisor },
+      permissions: { ...current.permissions, ...next.permissions },
+      memory: { ...current.memory, ...next.memory },
+      budgets: { ...current.budgets, ...next.budgets },
+      cursor: { ...current.cursor, ...next.cursor },
+      version: 1,
+    };
+    if (!Array.isArray(merged.checks) || merged.checks.some((ch) => !ch.name?.trim() || typeof ch.command !== "string")) bad("检查命令需要名字和命令");
+    if (merged.budgets.executor < 2048 || merged.budgets.planner < 2048) bad("注入预算不能小于 2KB");
+    const commandChanged = merged.cursor.command !== current.cursor.command;
+    state.ws.saveSettings(merged);
+    if (commandChanged) await state.refreshAuth(true);
+    state.broadcast({ type: "state" });
+    return c.json(merged);
+  });
+
+  app.post("/api/checks/try", async (c) => {
+    const { name, command } = await body<{ name?: string; command: string }>(c);
+    const [result] = await runChecks([{ name: name ?? "试运行", command, timeoutSec: 120 }], { cwd: state.ws.root });
+    return c.json(result);
+  });
+
+  // ---------- context, rules, memory, lessons ----------
+
+  app.get("/api/context", (c) => c.json({ content: state.ws.readContext() }));
+  app.put("/api/context", async (c) => {
+    const { content } = await body<{ content: string }>(c);
+    if (typeof content !== "string") bad("缺少 content");
+    if (Buffer.byteLength(content) > 8 * 1024) bad("房间上下文超过 8KB，请把细节移进记忆");
+    state.ws.writeContext(content);
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/rules", (c) => c.json(state.ws.listRules()));
+  app.put("/api/rules/:name", async (c) => {
+    const { content } = await body<{ content: string }>(c);
+    state.ws.writeRule(c.req.param("name"), content);
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/memory", (c) => c.json(listMemory(state.ws).reverse()));
+  app.post("/api/memory", async (c) => {
+    const input = await body<{ text: string; kind?: "fact" | "decision" | "preference"; pinned?: boolean; supersedes?: string }>(c);
+    const result = remember(state.ws, { ...input, author: "user" });
+    if (!result.ok) bad(result.reason);
+    return c.json(result.entry);
+  });
+  app.patch("/api/memory/:id", async (c) => {
+    const patch = await body<{ pinned?: boolean; status?: "active" | "superseded" }>(c);
+    return c.json(updateMemory(state.ws, c.req.param("id"), patch));
+  });
+
+  app.get("/api/lessons", (c) => c.json(listLessons(state.ws)));
+  app.post("/api/lessons", async (c) => {
+    const input = await body<{ title: string; body: string }>(c);
+    return c.json(recordLesson(state.ws, input));
+  });
+  app.patch("/api/lessons/:id", async (c) => {
+    const patch = await body<{ status?: "open" | "hardened" | "closed"; hardenedBy?: string }>(c);
+    return c.json(updateLesson(state.ws, c.req.param("id"), patch));
+  });
+
+  // ---------- agents ----------
+
+  app.get("/api/agents", (c) => c.json(state.ws.listAgents()));
+  app.put("/api/agents/:id", async (c) => {
+    const card = await body<AgentCard>(c);
+    const agent: AgentCard = { ...card, id: c.req.param("id") };
+    const routeError = validateAgentRoute(agent);
+    if (routeError) bad(routeError);
+    if (!agent.roles?.length) bad("至少选择一个角色");
+    if (agent.roles.includes("advisor") && agent.permissions.write) bad("顾问必须只读：同时担任顾问的 agent 不能有写权限");
+    state.ws.saveAgent(agent);
+    state.broadcast({ type: "state" });
+    return c.json(agent);
+  });
+  app.delete("/api/agents/:id", (c) => {
+    state.ws.deleteAgent(c.req.param("id"));
+    state.broadcast({ type: "state" });
+    return c.json({ ok: true });
+  });
+  app.get("/api/agents/:id/briefing", async (c) => {
+    const role = (c.req.query("role") ?? "implement") as Role;
+    if (!["plan", "implement", "review", "advisor"].includes(role)) bad("role 不合法");
+    return c.json(await state.orchestrator.briefingPreview(c.req.param("id"), role, c.req.query("thread") || undefined));
+  });
+
+  app.get("/api/models", async (c) => {
+    const force = c.req.query("refresh") === "1";
+    const [chatgpt, deepseek, cursor] = await Promise.all([state.listPiModels("openai"), state.listPiModels("deepseek"), state.listCursorModels(force)]);
+    return c.json({ chatgpt, deepseek, cursor: cursor.models, cursorError: cursor.error });
+  });
+
+  app.get("/api/stats", (c) => c.json(state.orchestrator.stats()));
+
+  // ---------- threads ----------
+
+  app.get("/api/threads", (c) => c.json(state.orchestrator.listThreads().map(threadSummary)));
+  app.post("/api/threads", async (c) => {
+    const input = await body<{ title: string; task: string; acceptance: string[]; stage?: Stage; agentId?: string }>(c);
+    if (input.stage && !["plan", "implement", "review"].includes(input.stage)) bad("起始阶段不合法");
+    const thread = state.orchestrator.createThread({ ...input, acceptance: input.acceptance ?? [] });
+    return c.json(thread);
+  });
+  app.get("/api/threads/:id", (c) => {
+    const thread = state.orchestrator.getThread(c.req.param("id"));
+    if (!thread) throw new HTTPException(404, { message: "找不到线程" });
+    return c.json(thread);
+  });
+  app.delete("/api/threads/:id", (c) => {
+    state.orchestrator.deleteThread(c.req.param("id"));
+    return c.json({ ok: true });
+  });
+  app.post("/api/threads/:id/messages", async (c) => {
+    const { text } = await body<{ text: string }>(c);
+    if (!text?.trim()) bad("消息不能为空");
+    state.orchestrator.postMessage(c.req.param("id"), text);
+    return c.json({ ok: true });
+  });
+  app.post("/api/threads/:id/decisions/:decisionId", async (c) => {
+    const input = await body<{ approve: boolean; agentId?: string }>(c);
+    await state.orchestrator.decide(c.req.param("id"), c.req.param("decisionId"), input);
+    return c.json({ ok: true });
+  });
+  app.post("/api/threads/:id/cancel", (c) => {
+    state.orchestrator.cancel(c.req.param("id"));
+    return c.json({ ok: true });
+  });
+  app.post("/api/approvals/:id", async (c) => {
+    const { allow } = await body<{ allow: boolean }>(c);
+    state.orchestrator.respondApproval(c.req.param("id"), Boolean(allow));
+    return c.json({ ok: true });
+  });
+  app.get("/api/runs/:id/diff", async (c) => c.json({ diff: await state.orchestrator.runDiff(c.req.param("id")) }));
+  app.post("/api/runs/:id/rollback", async (c) => c.json({ files: await state.orchestrator.rollback(c.req.param("id")) }));
+
+  // ---------- auth ----------
+
+  app.post("/api/auth/chatgpt/login", async (c) => c.json({ url: await state.startChatGptLogin() }));
+  app.post("/api/auth/chatgpt/manual", async (c) => {
+    const { input } = await body<{ input: string }>(c);
+    state.submitChatGptManual(input);
+    return c.json({ ok: true });
+  });
+  app.post("/api/auth/chatgpt/cancel", (c) => {
+    state.cancelChatGptLogin();
+    return c.json({ ok: true });
+  });
+  app.post("/api/auth/chatgpt/logout", async (c) => {
+    await state.logoutChatGpt();
+    return c.json({ ok: true });
+  });
+  app.post("/api/auth/deepseek", async (c) => {
+    const { key } = await body<{ key: string }>(c);
+    await state.setDeepSeekKey(key ?? "");
+    return c.json({ ok: true });
+  });
+  app.delete("/api/auth/deepseek", async (c) => {
+    await state.clearDeepSeekKey();
+    return c.json({ ok: true });
+  });
+  app.post("/api/auth/cursor/refresh", async (c) => {
+    await state.refreshAuth(true);
+    return c.json(state.authStatus().cursor);
+  });
+  app.post("/api/auth/cursor/login", async (c) => c.json({ url: await state.startCursorLogin() }));
+
+  // ---------- MCP / wb bridge ----------
+
+  app.post("/api/bridge/tool", async (c) => {
+    const { tool, args } = await body<{ tool: string; args?: unknown }>(c);
+    const token = c.req.header("x-workbench-token") || undefined;
+    const out = await state.orchestrator.bridgeTool(token, tool, args ?? {});
+    return c.json(out, out.isError ? 422 : 200);
+  });
+
+  app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
+
+  const dist = path.join(REPO_ROOT, "apps/web/dist");
+  if (process.env.NODE_ENV === "production" && fs.existsSync(dist)) {
+    app.use("/*", serveStatic({ root: path.relative(process.cwd(), dist) }));
+    app.get("*", (c) => c.html(fs.readFileSync(path.join(dist, "index.html"), "utf8")));
+  } else {
+    app.get("/", (c) => c.text("Workbench API is running. Open the web app (pnpm dev) at http://127.0.0.1:47320"));
+  }
+
+  return app;
+}

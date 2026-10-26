@@ -86,8 +86,9 @@ export function demoScript(role: Role, thread: Thread | undefined, prompt: strin
 
   if (role === "review") {
     const verdict = wantsSendBack ? "fail" : "pass";
+    const implemented = [...(thread?.runs ?? [])].reverse().find((r) => r.stage === "implement")?.changedFiles[0];
     return [
-      fauxAssistantMessage([fauxText("检查命令已经跑过，我再读一遍改动。"), fauxToolCall("read_file", { path: note })], toolUse),
+      fauxAssistantMessage([fauxText("检查命令已经跑过，我再读一遍改动。"), fauxToolCall("read_file", { path: implemented ?? note })], toolUse),
       fauxAssistantMessage(
         [
           fauxToolCall("write_handoff", {
