@@ -119,7 +119,7 @@ export class AppState {
     const demoDir = path.join(this.home, "demo-workspace");
     const target = envWs ? path.resolve(envWs) : this.persisted.lastWorkspace && fs.existsSync(this.persisted.lastWorkspace) ? this.persisted.lastWorkspace : demoDir;
     if (target === demoDir) fs.mkdirSync(demoDir, { recursive: true });
-    this.openWorkspace(target, { demo: this.options.demo ?? (target === demoDir || process.env.BATON_DEMO === "1") });
+    this.openWorkspace(target, { demo: this.options.demo ?? (this.isDemoDir(target) || process.env.BATON_DEMO === "1") });
     await this.refreshAuth(true);
   }
 
@@ -131,7 +131,7 @@ export class AppState {
       fs.mkdirSync(resolved, { recursive: true });
     }
     if (!fs.statSync(resolved).isDirectory()) throw new Error(`不是目录：${resolved}`);
-    const demo = options.demo ?? (path.resolve(resolved) === path.join(this.home, "demo-workspace"));
+    const demo = options.demo ?? this.isDemoDir(resolved);
     const ws = Workspace.open(resolved, { demo });
     if (this.options.cursorCommand && ws.settings().cursor.command !== this.options.cursorCommand) {
       ws.saveSettings({ ...ws.settings(), cursor: { command: this.options.cursorCommand } });
@@ -157,6 +157,13 @@ export class AppState {
     this.persisted.recent = [ws.root, ...this.persisted.recent.filter((r) => r !== ws.root)].slice(0, 8);
     writeFileAtomic(path.join(this.home, "state.json"), JSON.stringify(this.persisted, null, 2));
     this.broadcast({ type: "state" });
+  }
+
+  /** Workspaces are remembered by real path, so compare real paths (macOS's /tmp is a link to /private/tmp). */
+  private isDemoDir(dir: string): boolean {
+    const demoDir = path.join(this.home, "demo-workspace");
+    if (!fs.existsSync(dir) || !fs.existsSync(demoDir)) return false;
+    return fs.realpathSync(dir) === fs.realpathSync(demoDir);
   }
 
   recent(): string[] {

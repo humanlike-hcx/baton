@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Briefing, MemoryEntry, StatRow, Thread } from "@baton/core";
 import { describe, expect, it } from "vitest";
-import { tempDir, testServer } from "./helpers.ts";
+import { createApp } from "../src/app.ts";
+import { AppState } from "../src/state.ts";
+import { HOST, tempDir, testServer } from "./helpers.ts";
 
 const implementNow = (st: { confirm: { planToImplement: boolean } }) => (st.confirm.planToImplement = false);
 
@@ -91,6 +93,25 @@ describe("HTTP API: trying a check command (US-68)", () => {
     const fail = await s.post("/api/checks/try", { command: "echo boom >&2; exit 3" });
     expect(fail).toMatchObject({ status: "fail", exitCode: 3 });
     expect(fail.output).toContain("boom");
+  });
+});
+
+describe("HTTP API: the demo workspace on first start (US-83)", () => {
+  it("stays the demo workspace after a restart, even when the data directory is reached through a link", async () => {
+    const real = tempDir("baton-home-real-");
+    const home = path.join(tempDir("baton-home-link-"), "home");
+    fs.symlinkSync(real, home);
+    const start = async () => {
+      const state = new AppState({ baseUrl: "http://127.0.0.1:9", home });
+      await state.init();
+      const res = await createApp(state).request("/api/state", { headers: { host: HOST } });
+      return (await res.json()) as { workspace: { root: string; name: string; demo: boolean } };
+    };
+
+    const first = await start();
+    expect(first.workspace).toMatchObject({ name: "demo-workspace", demo: true });
+    const again = await start();
+    expect(again.workspace).toMatchObject({ root: first.workspace.root, demo: true });
   });
 });
 
