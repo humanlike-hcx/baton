@@ -1,0 +1,167 @@
+# Workbench 设计文档
+
+个人 agent 工作台：把已订阅的模型登录进来，让多个 agent 在同一个工作区里协作，共用一套上下文、记忆和工具。第一版是单人、单机、本地网页，结构按以后包成 Electron 桌面应用设计。
+
+## 1. 范围
+
+第一版接入三条路径，每个模型家族只走一条：
+
+| 运行时 | 额度来源 | 模型 | 说明 |
+|---|---|---|---|
+| Pi（我们的循环） | ChatGPT 登录（Sign in with ChatGPT） | GPT 系 | GPT 只走这一条 |
+| Pi（我们的循环） | DeepSeek API key | DeepSeek 系 | 唯一允许使用 key 的例外 |
+| Cursor Agent（通过 ACP） | Cursor 登录（`agent login`） | Cursor 账号可用的非 GPT 模型 | 过滤掉 GPT 家族，不提供 Auto |
+
+不做：多人、账号体系、看板、聊天软件集成、容器沙箱、Claude 订阅 token。
+
+## 2. 核心概念
+
+- **工作区**：一个本地目录。所有 agent 读写同一份文件。工作台的状态放在 `<工作区>/.workbench/`。
+- **agent**：角色 + 运行时 + 模型。定义在 `.workbench/agents/*.md` 的 frontmatter（能力卡）。
+- **线程**：一件事。按阶段推进：方案 → 实现 → 检查 → 完成，检查可以退回实现。
+- **运行**：某个 agent 在某个线程里的一次执行。
+- **交接**：每次运行结束时写回的记录：做了什么、改了哪些文件、还剩什么、建议下一步。
+
+## 3. 工作区目录
+
+```
+AGENTS.md                 # 公共规则，Pi 和 Cursor 都会读；由工作台维护其中的标记段
+.cursor/mcp.json          # 工作台写入 workbench MCP 服务
+.workbench/
+  workspace.json          # 工作区设置：检查命令、权限默认值、上限
+  CONTEXT.md              # 房间上下文，约 2k token 预算
+  rules/
+    base.md               # 共用底座
+    role-plan.md          # 各阶段角色规则
+    role-implement.md
+    role-review.md
+    role-advisor.md
+    runtime-pi.md         # 运行时校准
+    runtime-cursor.md
+    family-<家族>.md      # 可选，默认不启用
+  agents/*.md             # 能力卡
+  memory/*.md             # 记忆条目（frontmatter 带状态）
+  lessons/*.md            # 教训单
+  handoffs/<线程>/<运行>.md
+  threads/<线程>.json     # 线程与运行元数据
+  sessions/               # Pi 会话 JSONL、ACP 事件日志（原始记录，长期保留）
+  audit.jsonl             # 工具调用与审批审计
+  shadow.git/             # 影子 Git，用于快照、diff、回滚
+```
+
+## 4. 上下文
+
+### 4.1 开场注入（按「角色 × 运行时」拼装）
+
+每次运行开始时现场拼装，顺序固定，方便命中提示词缓存：
+
+1. `rules/base.md`
+2. `rules/role-<阶段>.md`
+3. `rules/runtime-<运行时>.md`
+4. 可选的 `rules/family-<家族>.md`
+5. agent 自己的职责说明（能力卡正文）
+6. `CONTEXT.md`
+7. 置顶记忆
+8. 线程摘要 + 最近三条交接
+9. 自该 agent 上次运行以来的文件 diff 概要
+10. 任务卡：阶段、任务、验收标准、角色声明
+
+执行阶段（实现、检查）拿不到调度规则和 `handoff_to`，只能在交接里写「建议下一步」。
+
+**注入预算**：方案/顾问角色 ≤ 24KB，执行角色 ≤ 12KB。超过时运行不会启动，界面提示哪一段超了。每个 agent 都有「开场上下文」页面，列出每段的来源、大小和重复内容。
+
+每次运行记录拼装结果的哈希，原始记录里能还原「当时它看到的是什么」。
+
+### 4.2 压缩
+
+- 运行内：Pi 自带压缩（超过「窗口 − 16k」触发，保留最近约 20k token，结构化摘要）。通过 `session_before_compact` 把摘要里的进展同步到交接草稿。Cursor 的压缩由它自己负责。
+- 跨运行：agent 之间不传原始对话。线程保留最近三条交接原文，更早的滚进线程摘要。
+- `CONTEXT.md` 超预算时，整理员（Pi + DeepSeek）合并重复、把过时细节移进记忆，改动有 diff，可撤销。
+
+## 5. 记忆、交接、教训
+
+三条去向：
+
+- 长期不变的约束 → `AGENTS.md` / `rules/`
+- 事实和偏好 → `memory/`
+- 踩过的坑 → `lessons/`，再设法固化成权限规则、检查命令或测试
+
+记忆条目字段：`id`、`kind`（fact / decision / preference）、`status`（active / superseded）、`supersededBy`、`author`（agent）、`run`、`pinned`、`createdAt`。不删除、不覆盖。写入前检索相近条目。检索用 SQLite 全文索引（或在不可用时退化为内存扫描），不用向量库。工作区可以关闭记忆。
+
+教训单字段：`id`、`title`、`occurrences`、`status`（open / hardened / closed）、`hardenedBy`。同类问题出现第二次时提示固化。关闭条件：「这个坑现在还踩得到吗？」
+
+**维护机制**：
+
+1. 规则写进 `AGENTS.md` 和 `rules/base.md`。
+2. 运行结束没调用 `write_handoff`：追加一次 follow-up 要求写；仍然没有，用 DeepSeek 根据记录生成，标记为「自动生成」；DeepSeek 不可用时用最后一条回复生成。
+3. 记忆写入校验 schema、长度、重复。
+
+## 6. 接力与路由
+
+agent 只提议目标阶段，harness 决定交给谁。
+
+**挑选顺序**：承担该阶段 → 权限满足 → 额度可用 → 成本从低到高。
+
+**硬性规则**：
+
+- 检查与实现的模型家族不能相同。
+- 不能把同一阶段直接交回给刚交过来的 agent；退回只能走「检查 → 实现」。
+- 交接需要比发起方更高的权限时，停下来等用户批准。
+- 每次交接必须带验收标准；一跳既没改文件、也没新决定算空转，连续两次空转暂停。
+- 每个线程自动接力最多 6 跳，退回最多 2 轮；DeepSeek 按人民币设花费上限，ChatGPT 与 Cursor 按次数设上限。
+- 同一工作区同时只有一个写运行；只读运行可并行。
+
+**需要用户确认的节点**（每个都可以改成自动）：方案 → 实现之前；标记完成之前；触发任何硬性规则时。
+
+**顾问**：退回到第二轮、检查连续两轮报出新问题、或方案阶段定方向之前，自动请顾问（Pi + GPT，或 Cursor ask 模式的非 GPT 模型）。顾问在只读环境、干净上下文里工作，输入是三栏请教卡：机械事实、我的判断、我希望听到的答案。意见附在审批卡上，由用户决定。
+
+**统计**：按「运行时 + 模型」记录每个阶段的一次通过率、被退回次数、用户采纳率、平均花费。第一版只展示和建议。
+
+## 7. 检查
+
+检查阶段先跑 `workspace.json` 里配置的命令，再交给模型审查。结果四种：通过、失败、跳过、出错，跳过绝不算通过。新增检查命令时，可以提供一个已知有问题的样本，确认它会变红。
+
+## 8. 工具
+
+一份注册表，每个工具登记：名字、描述、参数 schema（TypeBox）、风险等级（read / write / exec / network / memory）、执行函数、暴露范围（native / mcp）、按家族变化的呈现（编辑工具对 GPT 是补丁格式，对其他是文本替换）。
+
+内置工具：`read_file`、`list_files`、`search`、`edit_file`（`apply_patch` 或 `replace`）、`write_file`、`shell`、`read_context`、`update_context`、`memory_search`、`remember`、`write_handoff`、`handoff_to`（仅方案/顾问角色）、`record_lesson`。
+
+出口：
+
+- Pi：作为自定义工具注入，不加载 Pi 的默认资源发现。
+- Cursor：本地 MCP 服务 `workbench-mcp`，只暴露 4 个工具：`read_context`、`memory_search`、`remember`、`write_handoff`。另有同等功能的 `wb` 命令行。
+
+shell 工具：单独返回退出码；截断时保留开头和结尾，只砍中间，保留 stderr；每个工具有输出上限；时间线显示每次调用占用的 token 估算。
+
+## 9. 权限
+
+1. 路径边界：解析真实路径，越出工作区或经符号链接逃逸一律拒绝；`.env*`、`.git/`、`.workbench/shadow.git`、凭证文件默认拒绝。
+2. 默认策略：读放行；写工作区放行（每次写运行前有快照）；执行命令询问，可设白名单和黑名单；联网询问。每个 agent 可以覆盖。
+3. 拦截点：Pi 工具在执行前统一过权限判断；Cursor 的 `session/request_permission` 转到工作台审批；MCP 工具在服务端过同一套判断。启动 Cursor 不加 `--force`。
+4. 审批卡预览 diff 或完整命令，超时按拒绝处理。
+5. 凭证存 `~/.workbench/credentials.json`（0600），不发到浏览器、不给工具读；shell 环境变量去掉凭证。Cursor 登录由它的 CLI 保管。
+6. 每次工具调用写入 `audit.jsonl`。
+
+局限：shell 以本人系统用户身份运行，第一版没有容器隔离。
+
+## 10. 快照与回滚
+
+每次写运行开始前，用影子 Git（`.workbench/shadow.git`，work tree 为工作区）提交一次快照。运行详情页显示这次运行的 diff，可以一键回滚到运行前。
+
+## 11. 架构
+
+```
+apps/web        Vite + React + shadcn/ui 单页应用，只通过 HTTP/WebSocket 与服务通信
+apps/server     本地服务：HTTP + WebSocket，凭证、登录、审批、运行调度
+packages/core   harness：工作区存储、规则拼装、记忆、路由、工具注册表、权限、执行器
+packages/mcp    workbench-mcp（stdio）与 wb 命令行，回调本地服务
+```
+
+执行器：
+
+- **Pi 执行器**：`@earendil-works/pi-coding-agent` SDK 的 `createAgentSession`，自定义模型运行时与工具，会话 JSONL 存到 `.workbench/sessions/`。
+- **ACP 执行器**：启动 `agent --model <id> acp`，按 ACP 流程 `initialize → session/new → session/prompt`，把 `session/update` 转成运行事件，把 `session/request_permission` 转给审批。
+- **演示执行器**：pi-ai 的假模型，不需要任何账号即可跑通整条流程，用于开发与测试。
+
+服务只监听 `127.0.0.1`。以后做桌面版，用 Electron 装入同一个服务和同一套界面。
