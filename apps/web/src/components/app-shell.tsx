@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { STAGE_LABEL, STATUS_LABEL, timeAgo } from "@/lib/format";
+import { STAGE_LABEL, statusLabel, timeAgo } from "@/lib/format";
 import { href, type Route } from "@/lib/router";
 import { useBaton } from "@/lib/store";
 
@@ -111,7 +111,7 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
               <div className="mt-0.5 flex items-center gap-1.5 pl-4 text-xs text-muted-foreground">
                 <span>{STAGE_LABEL[t.stage]}</span>
                 <span>·</span>
-                <span>{t.pending ? "等你确认" : STATUS_LABEL[t.status]}</span>
+                <span>{t.pending ? "等你确认" : statusLabel(t)}</span>
                 <span className="ml-auto">{timeAgo(t.updatedAt)}</span>
               </div>
             </a>

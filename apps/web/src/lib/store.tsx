@@ -69,6 +69,7 @@ export function BatonProvider({ children }: { children: ReactNode }) {
                   threads: [
                     {
                       id: msg.thread.id,
+                      kind: msg.thread.kind,
                       title: msg.thread.title,
                       stage: msg.thread.stage,
                       status: msg.thread.status,

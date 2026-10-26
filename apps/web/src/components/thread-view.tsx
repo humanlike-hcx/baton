@@ -1,17 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, Check, CircleStop, FileDiff, Hash, Loader2, PanelRight, Trash2 } from "lucide-react";
+import { ArrowUp, Check, CircleStop, FileDiff, Hash, Loader2, MessageCircle, PanelRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { del, post } from "@/lib/api";
-import { ROLE_LABEL, STAGES, STAGE_LABEL, STATUS_LABEL, STATUS_TONE, kb, tokens } from "@/lib/format";
+import { ROLE_LABEL, SOURCE_LABEL, STAGES, STAGE_LABEL, STATUS_TONE, kb, statusLabel, tokens } from "@/lib/format";
 import { navigate } from "@/lib/router";
 import { useThread, useBaton } from "@/lib/store";
-import type { Thread } from "@/lib/types";
+import type { AgentView, Thread } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { DiffDialog } from "./diff-dialog";
 import { TimelineView } from "./timeline";
@@ -45,34 +47,49 @@ function StageStepper({ thread }: { thread: Thread }) {
 }
 
 function RunsPanel({ thread, onDiff }: { thread: Thread; onDiff: (runId: string, title: string) => void }) {
+  const spend = (
+    <div className="mt-2 text-xs text-muted-foreground">
+      花费：DeepSeek ¥{thread.spend.deepseekCny.toFixed(2)} · ChatGPT {thread.spend.chatgptRuns} 次 · Cursor {thread.spend.cursorRuns} 次
+    </div>
+  );
   return (
     <div className="space-y-5 text-sm">
-      <section>
-        <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">验收标准</h3>
-        <ol className="list-decimal space-y-1 pl-5">
-          {thread.acceptance.map((a, i) => (
-            <li key={i}>{a}</li>
-          ))}
-        </ol>
-      </section>
-      <section>
-        <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">接力</h3>
-        <div className="grid grid-cols-3 gap-2 text-center">
-          {[
-            ["自动接力", `${thread.hops} 跳`],
-            ["退回", `${thread.sendBacks} 轮`],
-            ["空转", `${thread.stalls} 次`],
-          ].map(([k, v]) => (
-            <div key={k} className="rounded-lg border px-2 py-1.5">
-              <div className="text-[11px] text-muted-foreground">{k}</div>
-              <div className="font-medium tabular-nums">{v}</div>
+      {thread.kind === "chat" ? (
+        <section>
+          <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">对话</h3>
+          <p className="text-xs text-muted-foreground">
+            {thread.approvedLevel >= 2 ? "写权限已开放（仅本线程，服务重启后收回）。每次回复前自动快照。" : "只读：agent 只能读文件、读上下文、查和写记忆。"}
+          </p>
+          {spend}
+        </section>
+      ) : (
+        <>
+          <section>
+            <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">验收标准</h3>
+            <ol className="list-decimal space-y-1 pl-5">
+              {thread.acceptance.map((a, i) => (
+                <li key={i}>{a}</li>
+              ))}
+            </ol>
+          </section>
+          <section>
+            <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">接力</h3>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              {[
+                ["自动接力", `${thread.hops} 跳`],
+                ["退回", `${thread.sendBacks} 轮`],
+                ["空转", `${thread.stalls} 次`],
+              ].map(([k, v]) => (
+                <div key={k} className="rounded-lg border px-2 py-1.5">
+                  <div className="text-[11px] text-muted-foreground">{k}</div>
+                  <div className="font-medium tabular-nums">{v}</div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <div className="mt-2 text-xs text-muted-foreground">
-          花费：DeepSeek ¥{thread.spend.deepseekCny.toFixed(2)} · ChatGPT {thread.spend.chatgptRuns} 次 · Cursor {thread.spend.cursorRuns} 次
-        </div>
-      </section>
+            {spend}
+          </section>
+        </>
+      )}
       <section>
         <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">运行记录</h3>
         {thread.runs.length === 0 && <p className="text-xs text-muted-foreground">还没有运行。</p>}
@@ -115,6 +132,7 @@ function RunsPanel({ thread, onDiff }: { thread: Thread; onDiff: (runId: string,
 }
 
 function composerHint(thread: Thread): string {
+  if (thread.kind === "chat") return thread.status === "running" || thread.status === "waiting" ? "正在回复。现在发的消息会在这一轮结束后接着回复。" : "接着聊…";
   if (thread.status === "running") return "运行中。补充的要求会带给下一次运行。";
   if (thread.pending) return "等你确认上面的卡片。补充的要求会带给下一次运行。";
   if (thread.status === "done") return "线程已完成。发消息会重新打开它，从「实现」继续。";
@@ -122,11 +140,55 @@ function composerHint(thread: Thread): string {
   return "补充要求…";
 }
 
+function ChatControls({ thread, agents, agentId, onAgent }: { thread: Thread; agents: AgentView[]; agentId?: string; onAgent: (id: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const agent = agents.find((a) => a.id === agentId);
+  const open = thread.approvedLevel >= 2;
+  const replying = thread.status === "running" || thread.status === "waiting";
+  const toggle = async (allow: boolean) => {
+    setBusy(true);
+    try {
+      await post(`/api/threads/${thread.id}/write`, { allow });
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mx-auto mb-2 flex max-w-4xl flex-wrap items-center gap-x-4 gap-y-2">
+      <Select value={agentId} onValueChange={onAgent}>
+        <SelectTrigger size="sm" className="min-w-56" aria-label="回复的 agent">
+          <SelectValue placeholder="选择 agent" />
+        </SelectTrigger>
+        <SelectContent>
+          {agents
+            .filter((a) => a.enabled)
+            .map((a) => (
+              <SelectItem key={a.id} value={a.id} disabled={!a.available}>
+                {a.name} · {SOURCE_LABEL[a.source]}
+                {!a.available ? "（未登录）" : ""}
+              </SelectItem>
+            ))}
+        </SelectContent>
+      </Select>
+      {agentId && agentId !== thread.pinnedAgents.chat && <span className="text-xs text-muted-foreground">下一条消息由它接着回复</span>}
+      <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground" title="只对这个线程有效；每次回复前自动快照，服务重启后收回">
+        <Switch size="sm" checked={open} disabled={busy || replying} onCheckedChange={(on) => void toggle(on)} />
+        允许改文件（仅本线程）
+        {open && agent && !agent.permissions.write && <span className="text-amber-700 dark:text-amber-300">· {agent.name} 本身没有写权限</span>}
+      </label>
+    </div>
+  );
+}
+
 export function ThreadView({ threadId }: { threadId: string }) {
   const { thread, error, loading } = useThread(threadId);
   const { state } = useBaton();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [chatAgent, setChatAgent] = useState<string>();
+  const replyAgent = chatAgent ?? thread?.pinnedAgents.chat;
   const [diff, setDiff] = useState<{ runId: string; title: string }>();
   const [rollbackRun, setRollbackRun] = useState<string>();
   const [panelOpen, setPanelOpen] = useState(false);
@@ -140,13 +202,14 @@ export function ThreadView({ threadId }: { threadId: string }) {
 
   useEffect(() => {
     stick.current = true;
+    setChatAgent(undefined);
   }, [threadId]);
 
   const send = async () => {
     if (!text.trim() || !thread) return;
     setSending(true);
     try {
-      await post(`/api/threads/${thread.id}/messages`, { text });
+      await post(`/api/threads/${thread.id}/messages`, { text, agentId: thread.kind === "chat" ? replyAgent : undefined });
       setText("");
       stick.current = true;
     } catch (e) {
@@ -218,11 +281,18 @@ export function ThreadView({ threadId }: { threadId: string }) {
             <div className="min-w-0 flex-1">
               <h1 className="truncate text-base font-semibold sm:text-lg">{thread.title}</h1>
               <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                <StageStepper thread={thread} />
+                {thread.kind === "chat" ? (
+                  <Badge variant="outline">
+                    <MessageCircle /> 对话
+                  </Badge>
+                ) : (
+                  <StageStepper thread={thread} />
+                )}
                 <Badge className={cn("border-0", STATUS_TONE[thread.status])}>
                   {thread.status === "running" && <Loader2 className="animate-spin" />}
-                  {STATUS_LABEL[thread.status]}
+                  {statusLabel(thread)}
                 </Badge>
+                {thread.kind === "chat" && thread.approvedLevel >= 2 && <Badge className="border-0 bg-amber-500/15 text-amber-700 dark:text-amber-300">可写</Badge>}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
@@ -262,6 +332,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
         </div>
 
         <div className="border-t px-4 py-3 sm:px-6">
+          {thread.kind === "chat" && <ChatControls thread={thread} agents={state?.agents ?? []} agentId={replyAgent} onAgent={setChatAgent} />}
           <div className="mx-auto flex max-w-4xl items-end gap-2">
             <Textarea
               value={text}

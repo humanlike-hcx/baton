@@ -11,12 +11,13 @@ export type {
   RunRecord,
   Stage,
   Thread,
+  ThreadKind,
   ThreadStatus,
   TimelineItem,
   WorkspaceSettings,
 } from "@baton/core/types";
 
-import type { AgentCard, AuthStatus, Stage, ThreadStatus, WorkspaceSettings } from "@baton/core/types";
+import type { AgentCard, AuthStatus, Stage, ThreadKind, ThreadStatus, WorkspaceSettings } from "@baton/core/types";
 
 export interface AgentView extends AgentCard {
   available: boolean;
@@ -25,6 +26,7 @@ export interface AgentView extends AgentCard {
 
 export interface ThreadSummary {
   id: string;
+  kind: ThreadKind;
   title: string;
   stage: Stage;
   status: ThreadStatus;

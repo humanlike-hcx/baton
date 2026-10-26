@@ -1,4 +1,4 @@
-import type { AgentCard, Role, Stage, ThreadStatus } from "./types";
+import type { AgentCard, Role, Stage, ThreadKind, ThreadStatus } from "./types";
 
 export const STAGES: Stage[] = ["plan", "implement", "review", "done"];
 
@@ -12,6 +12,11 @@ export const STATUS_LABEL: Record<ThreadStatus, string> = {
   paused: "已暂停",
   done: "已完成",
 };
+
+/** A chat thread that is not replying is simply waiting for the next message. */
+export function statusLabel(thread: { kind: ThreadKind; status: ThreadStatus }): string {
+  return thread.kind === "chat" && thread.status === "idle" ? "空闲" : STATUS_LABEL[thread.status];
+}
 
 export const STATUS_TONE: Record<ThreadStatus, string> = {
   idle: "bg-muted text-muted-foreground",

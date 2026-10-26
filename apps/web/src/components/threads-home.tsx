@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { STAGE_LABEL, STATUS_LABEL, STATUS_TONE, timeAgo } from "@/lib/format";
+import { STAGE_LABEL, STATUS_TONE, statusLabel, timeAgo } from "@/lib/format";
 import { href } from "@/lib/router";
 import { useBaton } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -42,7 +42,7 @@ export function ThreadsHome() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold">线程</h1>
-            <p className="mt-1 text-sm text-muted-foreground">一件事一个线程。agent 只提议下一阶段，交给谁由规则决定。</p>
+            <p className="mt-1 text-sm text-muted-foreground">日常提问用对话：选一个 agent 直接聊，随时换人接着聊。需要验收的事用接力：agent 只提议下一阶段，交给谁由规则决定。</p>
           </div>
           <Button asChild>
             <a href={href({ page: "new" })}>
@@ -100,11 +100,11 @@ export function ThreadsHome() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{t.title}</div>
                     <div className="mt-0.5 text-xs text-muted-foreground">
-                      {STAGE_LABEL[t.stage]} · {t.runs} 次运行 · {timeAgo(t.updatedAt)}
+                      {STAGE_LABEL[t.stage]} · {t.runs} {t.kind === "chat" ? "轮" : "次运行"} · {timeAgo(t.updatedAt)}
                     </div>
                   </div>
                   {t.pending && <span className="hidden text-xs text-amber-700 sm:inline">{t.pending}</span>}
-                  <Badge className={cn("border-0", STATUS_TONE[t.status])}>{STATUS_LABEL[t.status]}</Badge>
+                  <Badge className={cn("border-0", STATUS_TONE[t.status])}>{statusLabel(t)}</Badge>
                 </a>
               ))}
             </div>
