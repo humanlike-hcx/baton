@@ -23,7 +23,7 @@ function agent(partial: Partial<AgentCard> & Pick<AgentCard, "id" | "model">): A
     source: "demo",
     provider: "x",
     roles: ["implement"],
-    permissions: { write: true, exec: "ask", network: "deny" },
+    permissions: { write: "allow", exec: "ask", network: "deny" },
     costTier: 1,
     enabled: true,
     body: "",
@@ -135,7 +135,7 @@ describe("tools per role", () => {
     expect(toolsFor(gpt, "plan").map((t) => t.name)).toContain("handoff_to");
     expect(toolsFor(gpt, "plan").map((t) => t.name)).not.toContain("write_file");
     expect(toolsFor(gpt, "advisor").map((t) => t.name)).toEqual(["read_file", "list_files", "search", "read_context", "memory_search"]);
-    const readOnly = agent({ id: "r", model: "x", permissions: { write: false, exec: "deny", network: "deny" } });
+    const readOnly = agent({ id: "r", model: "x", permissions: { write: "deny", exec: "deny", network: "deny" } });
     expect(toolsFor(readOnly, "implement").map((t) => t.name)).not.toContain("shell");
   });
 });
@@ -244,8 +244,8 @@ describe("router", () => {
   const settings = defaultSettings("t");
   const coderGpt = agent({ id: "coder-gpt", model: "gpt-5.5", costTier: 3 });
   const coderDs = agent({ id: "coder-ds", model: "deepseek-v4-pro", costTier: 1 });
-  const reviewerGpt = agent({ id: "rev-gpt", model: "gpt-5.5", roles: ["review"], permissions: { write: false, exec: "ask", network: "deny" } });
-  const reviewerClaude = agent({ id: "rev-claude", model: "sonnet-4.5", roles: ["review"], costTier: 2, permissions: { write: false, exec: "ask", network: "deny" } });
+  const reviewerGpt = agent({ id: "rev-gpt", model: "gpt-5.5", roles: ["review"], permissions: { write: "deny", exec: "ask", network: "deny" } });
+  const reviewerClaude = agent({ id: "rev-claude", model: "sonnet-4.5", roles: ["review"], costTier: 2, permissions: { write: "deny", exec: "ask", network: "deny" } });
   const all = [coderGpt, coderDs, reviewerGpt, reviewerClaude];
 
   it("picks the cheapest available agent that owns the role", () => {

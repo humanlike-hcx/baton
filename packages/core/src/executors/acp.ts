@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { shellPolicy } from "../permissions.ts";
+import { canWrite, shellPolicy } from "../permissions.ts";
 import type { Risk } from "../types.ts";
 import { HANDOFF_REMINDER, expectsHandoff, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
 
@@ -143,7 +143,7 @@ export class AcpExecutor implements Executor {
       stdio: ["pipe", "pipe", "pipe"],
     });
     const conn = new AcpConnection(child);
-    const readOnly = !agent.permissions.write || req.role === "review" || req.role === "advisor" || req.role === "plan";
+    const readOnly = !canWrite(agent.permissions) || req.role === "review" || req.role === "advisor" || req.role === "plan";
     let finalText = "";
     let currentText = "";
     const toolTitles = new Map<string, string>();
@@ -208,7 +208,8 @@ export class AcpExecutor implements Executor {
       if (risk === "read") return answer(true);
       if (risk === "write") {
         if (readOnly) return answer(false);
-        return answer(true);
+        if (agent.permissions.write === "allow") return answer(true);
+        return answer(await req.requestApproval({ risk, title: call.title ?? "改文件", preview }));
       }
       if (risk === "network") {
         if (agent.permissions.network === "deny") return answer(false);

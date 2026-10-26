@@ -42,7 +42,7 @@ function blankAgent(): AgentCard {
     provider: "cursor",
     model: "",
     roles: ["implement"],
-    permissions: { write: true, exec: "ask", network: "ask" },
+    permissions: { write: "allow", exec: "ask", network: "ask" },
     costTier: 2,
     enabled: true,
     body: "",
@@ -57,7 +57,7 @@ function modelsFor(source: AgentCard["source"], models?: ModelsResponse): ModelO
 
 function PermissionChips({ agent }: { agent: AgentCard }) {
   const chips = [
-    { label: agent.permissions.write ? "可写文件" : "只读", warn: agent.permissions.write },
+    { label: agent.permissions.write === "deny" ? "只读" : `写文件：${POLICY_LABEL[agent.permissions.write]}`, warn: agent.permissions.write === "allow" },
     { label: `命令：${POLICY_LABEL[agent.permissions.exec]}`, warn: agent.permissions.exec === "allow" },
     { label: `联网：${POLICY_LABEL[agent.permissions.network]}`, warn: agent.permissions.network === "allow" },
   ];
@@ -167,7 +167,7 @@ function AgentEditor({ agent, isNew, open, onOpenChange, demo }: { agent: AgentC
 
   const options = modelsFor(draft.source, models);
   const routeError = validateAgentRoute(draft);
-  const readOnlyAdvisor = draft.roles.includes("advisor") && draft.permissions.write;
+  const readOnlyAdvisor = draft.roles.includes("advisor") && draft.permissions.write !== "deny";
   const showCustom = customModel || (draft.source === "cursor" && !!models && options.length === 0);
 
   const setSource = (source: AgentCard["source"]) => setDraft((d) => ({ ...d, source, ...ROUTE[source], model: "" }));
@@ -180,7 +180,7 @@ function AgentEditor({ agent, isNew, open, onOpenChange, demo }: { agent: AgentC
     if (!draft.name.trim()) return setError("请填写名字");
     if (routeError) return setError(routeError);
     if (!draft.roles.length) return setError("至少选择一个角色");
-    if (readOnlyAdvisor) return setError("顾问必须只读：担任顾问时请关闭写权限");
+    if (readOnlyAdvisor) return setError("顾问必须只读：担任顾问时请把写文件设为禁止");
     setSaving(true);
     try {
       await put(`/api/agents/${id}`, { ...draft, id });
@@ -300,13 +300,9 @@ function AgentEditor({ agent, isNew, open, onOpenChange, demo }: { agent: AgentC
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3">
-            <label className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
-              可写文件
-              <Switch checked={draft.permissions.write} onCheckedChange={(v) => setDraft({ ...draft, permissions: { ...draft.permissions, write: v } })} />
-            </label>
-            {(["exec", "network"] as const).map((k) => (
+            {(["write", "exec", "network"] as const).map((k) => (
               <div key={k} className="space-y-1">
-                <Label className="text-xs text-muted-foreground">{k === "exec" ? "运行命令" : "联网"}</Label>
+                <Label className="text-xs text-muted-foreground">{k === "write" ? "写文件" : k === "exec" ? "运行命令" : "联网"}</Label>
                 <Select value={draft.permissions[k]} onValueChange={(v) => setDraft({ ...draft, permissions: { ...draft.permissions, [k]: v } })}>
                   <SelectTrigger className="w-full">
                     <SelectValue />

@@ -5,7 +5,7 @@ import { Type, type TSchema } from "typebox";
 import { modelFamily } from "./families.ts";
 import { listMemory, recordLesson, remember, searchMemory } from "./memory.ts";
 import { applyChunks, parsePatch } from "./patch.ts";
-import { PermissionError, matchesDeny, resolveWorkspacePath, shellPolicy } from "./permissions.ts";
+import { PermissionError, canWrite, matchesDeny, resolveWorkspacePath, shellPolicy } from "./permissions.ts";
 import { formatShellResult, runShell } from "./shell.ts";
 import type { AgentCard, Handoff, Risk, Role, Stage } from "./types.ts";
 import { byteLength, globToRegExp, truncateMiddle } from "./util.ts";
@@ -35,7 +35,34 @@ export interface ToolSpec {
   parameters: TSchema;
   risk: Risk;
   mcp?: boolean;
+  /** What an approval card shows before a write runs. */
+  preview?(params: any, ctx: ToolContext): string;
   execute(params: any, ctx: ToolContext): Promise<ToolOutput>;
+}
+
+/** Line diff that keeps the common head and tail and shows the changed middle. */
+function changePreview(rel: string, before: string | undefined, after: string): string {
+  if (before === undefined) return [`新建 ${rel}`, ...after.split("\n").map((l) => `+${l}`)].join("\n");
+  const a = before.split("\n");
+  const b = after.split("\n");
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  return [
+    `--- ${rel}`,
+    `+++ ${rel}`,
+    `@@ 第 ${head + 1} 行 @@`,
+    ...a.slice(Math.max(0, head - 2), head).map((l) => ` ${l}`),
+    ...a.slice(head, a.length - tail).map((l) => `-${l}`),
+    ...b.slice(head, b.length - tail).map((l) => `+${l}`),
+    ...a.slice(a.length - tail, a.length - tail + 2).map((l) => ` ${l}`),
+  ].join("\n");
+}
+
+function readIfExists(ctx: ToolContext, input: string): { rel: string; text?: string } {
+  const { abs, rel } = resolveWorkspacePath(ctx.ws.root, input, ctx.ws.settings(), "write");
+  return { rel, text: fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : undefined };
 }
 
 const MAX_READ_BYTES = 48 * 1024;
@@ -202,6 +229,11 @@ export const editFileTool: ToolSpec = {
     replace_all: Type.Optional(Type.Boolean()),
   }),
   risk: "write",
+  preview(p: { path: string; old_string: string; new_string: string; replace_all?: boolean }, ctx) {
+    const { rel, text } = readIfExists(ctx, p.path);
+    if (text === undefined || !p.old_string) return `${rel}\n${[...p.old_string.split("\n").map((l) => `-${l}`), ...p.new_string.split("\n").map((l) => `+${l}`)].join("\n")}`;
+    return changePreview(rel, text, p.replace_all ? text.split(p.old_string).join(p.new_string) : text.replace(p.old_string, () => p.new_string));
+  },
   async execute(p: { path: string; old_string: string; new_string: string; replace_all?: boolean }, ctx) {
     const { abs, rel } = resolveWorkspacePath(ctx.ws.root, p.path, ctx.ws.settings(), "write");
     if (!fs.existsSync(abs)) return fail(`文件不存在：${rel}（新建文件请用 write_file）`);
@@ -234,6 +266,7 @@ export const applyPatchTool: ToolSpec = {
   ].join("\n"),
   parameters: Type.Object({ patch: Type.String({ description: "完整补丁文本" }) }),
   risk: "write",
+  preview: (p: { patch: string }) => p.patch,
   async execute(p: { patch: string }, ctx) {
     const settings = ctx.ws.settings();
     const ops = parsePatch(p.patch);
@@ -271,6 +304,10 @@ export const writeFileTool: ToolSpec = {
   description: "新建文件或整体覆盖文件内容。修改已有文件的一部分请用编辑工具。",
   parameters: Type.Object({ path: Type.String(), content: Type.String() }),
   risk: "write",
+  preview(p: { path: string; content: string }, ctx) {
+    const { rel, text } = readIfExists(ctx, p.path);
+    return changePreview(rel, text, p.content);
+  },
   async execute(p: { path: string; content: string }, ctx) {
     const { abs, rel } = resolveWorkspacePath(ctx.ws.root, p.path, ctx.ws.settings(), "write");
     const existed = fs.existsSync(abs);
@@ -467,7 +504,7 @@ export function toolsFor(agent: AgentCard, role: Role): ToolSpec[] {
     .map((name) => (name === "edit" ? (family === "gpt" ? "apply_patch" : "edit_file") : name))
     .map((name) => ALL_TOOLS.find((t) => t.name === name)!)
     .filter((t) => {
-      if (t.risk === "write") return agent.permissions.write;
+      if (t.risk === "write") return canWrite(agent.permissions);
       if (t.risk === "exec") return agent.permissions.exec !== "deny";
       return true;
     });
@@ -475,7 +512,14 @@ export function toolsFor(agent: AgentCard, role: Role): ToolSpec[] {
 
 export async function runTool(tool: ToolSpec, params: unknown, ctx: ToolContext): Promise<ToolOutput> {
   try {
-    if (tool.risk === "write" && !ctx.agent.permissions.write) return fail(`${ctx.agent.name} 没有写文件的权限`);
+    if (tool.risk === "write" && !canWrite(ctx.agent.permissions)) return fail(`${ctx.agent.name} 没有写文件的权限`);
+    if (tool.risk === "write" && ctx.agent.permissions.write === "ask") {
+      const p = (params ?? {}) as { path?: string };
+      const preview = tool.preview ? tool.preview(params ?? {}, ctx) : summarizeArgs(params, 4000);
+      const allowed = await ctx.requestApproval({ risk: "write", title: p.path ? `改文件：${p.path}` : "改文件", preview });
+      ctx.ws.audit({ run: ctx.run.id, agent: ctx.agent.id, tool: tool.name, risk: tool.risk, params: summarizeArgs(params), approved: allowed });
+      if (!allowed) return fail("用户拒绝了这次改动。换一种做法，或在交接里说明想改什么。");
+    }
     const out = await tool.execute(params ?? {}, ctx);
     ctx.ws.audit({ run: ctx.run.id, agent: ctx.agent.id, tool: tool.name, risk: tool.risk, params: summarizeArgs(params), ok: !out.isError });
     return out;

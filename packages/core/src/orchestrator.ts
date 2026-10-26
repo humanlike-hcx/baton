@@ -7,7 +7,7 @@ import type { PiExecutor } from "./executors/pi.ts";
 import type { ExecutorEvent, McpLaunch } from "./executors/types.ts";
 import { modelFamily } from "./families.ts";
 import { compactionProgress, mergeProgress, saveHandoff } from "./memory.ts";
-import { permissionLevel } from "./permissions.ts";
+import { canWrite, permissionLevel } from "./permissions.ts";
 import {
   ADVISOR_TRIGGER_LABEL,
   USD_TO_CNY,
@@ -400,7 +400,7 @@ export class Orchestrator {
       return;
     }
     const role = roleForStage(stage);
-    const writes = role === "implement" || (role === "chat" && chatPermissions(thread, agent).write);
+    const writes = role === "implement" || (role === "chat" && canWrite(chatPermissions(thread, agent)));
     if (writes && this.writeLock && this.writeLock !== thread.id) {
       thread.status = "waiting";
       this.writeQueue.push({ threadId: thread.id, run: { agentId: agent.id, stage, sendBack: opts.sendBack } });
@@ -717,7 +717,7 @@ export class Orchestrator {
       this.requestDecision(thread, {
         kind: "start_stage",
         title: `${next.name} 需要更高的权限`,
-        detail: `${prefix}${t.reason}。下一步需要${next.permissions.write ? "写文件" : ""}${next.permissions.exec === "allow" ? "、直接执行命令" : ""}的权限，超出了本线程已批准的范围。`,
+        detail: `${prefix}${t.reason}。下一步需要${canWrite(next.permissions) ? "写文件" : ""}${next.permissions.exec === "allow" ? "、直接执行命令" : ""}的权限，超出了本线程已批准的范围。`,
         stage: t.to,
         agentId: next.id,
         candidates,
@@ -828,7 +828,7 @@ export class Orchestrator {
       provider: "user",
       model: "user",
       roles: [],
-      permissions: { write: false, exec: "deny", network: "deny" },
+      permissions: { write: "deny", exec: "deny", network: "deny" },
       costTier: 0,
       enabled: true,
       body: "",

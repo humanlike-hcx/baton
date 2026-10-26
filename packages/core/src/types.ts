@@ -8,7 +8,7 @@ export type Policy = "allow" | "ask" | "deny";
 export type Risk = "read" | "write" | "exec" | "network" | "memory";
 
 export interface AgentPermissions {
-  write: boolean;
+  write: Policy;
   exec: Policy;
   network: Policy;
 }

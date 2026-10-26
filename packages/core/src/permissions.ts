@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentCard, Policy, WorkspaceSettings } from "./types.ts";
+import type { AgentCard, AgentPermissions, Policy, WorkspaceSettings } from "./types.ts";
 import { globToRegExp } from "./util.ts";
 
 export class PermissionError extends Error {}
@@ -77,9 +77,23 @@ export function shellPolicy(command: string, settings: WorkspaceSettings, agent:
   return { policy: "ask", reason: "执行命令需要确认" };
 }
 
+/** "ask" still counts as able to write: the user confirms each change. */
+export function canWrite(permissions: Pick<AgentPermissions, "write">): boolean {
+  return permissions.write !== "deny";
+}
+
+const POLICIES: Policy[] = ["allow", "ask", "deny"];
+
+/** Cards saved before write became a policy stored `write: true / false`. */
+export function normalizePermissions(raw: Partial<Record<keyof AgentPermissions, unknown>> | undefined): AgentPermissions {
+  const policy = (value: unknown, fallback: Policy): Policy =>
+    value === true ? "allow" : value === false ? "deny" : POLICIES.includes(value as Policy) ? (value as Policy) : fallback;
+  return { write: policy(raw?.write, "deny"), exec: policy(raw?.exec, "ask"), network: policy(raw?.network, "deny") };
+}
+
 export function permissionLevel(agent: Pick<AgentCard, "permissions">): number {
   if (agent.permissions.exec === "allow") return 3;
-  if (agent.permissions.write) return 2;
+  if (canWrite(agent.permissions)) return 2;
   if (agent.permissions.exec === "ask") return 1;
   return 0;
 }

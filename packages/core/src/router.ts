@@ -1,5 +1,5 @@
 import { modelFamily } from "./families.ts";
-import { permissionLevel } from "./permissions.ts";
+import { canWrite, permissionLevel } from "./permissions.ts";
 import type { AgentCard, Role, RunRecord, Stage, Thread, WorkspaceSettings } from "./types.ts";
 
 export const USD_TO_CNY = 7.2;
@@ -27,8 +27,8 @@ export function roleForStage(stage: Stage): Role {
  * opened writes for this thread, and never more than the agent's own card allows.
  */
 export function chatPermissions(thread: Pick<Thread, "approvedLevel">, agent: AgentCard): AgentCard["permissions"] {
-  const open = thread.approvedLevel >= 2 && agent.permissions.write;
-  return { write: open, exec: open ? agent.permissions.exec : "deny", network: agent.permissions.network };
+  const open = thread.approvedLevel >= 2 && canWrite(agent.permissions);
+  return { write: open ? agent.permissions.write : "deny", exec: open ? agent.permissions.exec : "deny", network: agent.permissions.network };
 }
 
 export function lastRun(thread: Thread, stage?: Stage): RunRecord | undefined {
@@ -70,11 +70,11 @@ export function selectAgent(stage: Stage, input: RouterInput, options: { role?: 
       reject("已停用");
       continue;
     }
-    if (role === "implement" && !agent.permissions.write) {
+    if (role === "implement" && !canWrite(agent.permissions)) {
       reject("没有写权限，不能承担实现");
       continue;
     }
-    if (role === "advisor" && (agent.permissions.write || agent.permissions.exec === "allow")) {
+    if (role === "advisor" && (canWrite(agent.permissions) || agent.permissions.exec === "allow")) {
       reject("顾问必须只读");
       continue;
     }

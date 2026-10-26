@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
+  canWrite,
   listLessons,
   listMemory,
+  normalizePermissions,
   recordLesson,
   remember,
   runChecks,
@@ -169,11 +171,12 @@ export function createApp(state: AppState): Hono {
   app.get("/api/agents", (c) => c.json(state.ws.listAgents()));
   app.put("/api/agents/:id", async (c) => {
     const card = await body<AgentCard>(c);
-    const agent: AgentCard = { ...card, id: c.req.param("id") };
+    const agent: AgentCard = { ...card, id: c.req.param("id"), permissions: normalizePermissions(card.permissions) };
     const routeError = validateAgentRoute(agent);
     if (routeError) bad(routeError);
     if (!agent.roles?.length) bad("至少选择一个角色");
-    if (agent.roles.includes("advisor") && agent.permissions.write) bad("顾问必须只读：同时担任顾问的 agent 不能有写权限");
+    if (agent.roles.includes("advisor") && canWrite(agent.permissions)) bad("顾问必须只读：同时担任顾问的 agent 不能有写权限");
+    if (agent.roles.includes("advisor") && agent.permissions.exec === "allow") bad("顾问必须只读：同时担任顾问的 agent 不能直接执行命令");
     state.ws.saveAgent(agent);
     state.broadcast({ type: "state" });
     return c.json(agent);

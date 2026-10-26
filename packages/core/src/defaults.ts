@@ -121,9 +121,9 @@ export function defaultSettings(name: string): WorkspaceSettings {
   };
 }
 
-const readOnly = { write: false, exec: "deny", network: "deny" } as const;
-const reviewer = { write: false, exec: "ask", network: "deny" } as const;
-const writer = { write: true, exec: "ask", network: "deny" } as const;
+const readOnly = { write: "deny", exec: "deny", network: "deny" } as const;
+const reviewer = { write: "deny", exec: "ask", network: "deny" } as const;
+const writer = { write: "allow", exec: "ask", network: "deny" } as const;
 
 export function defaultAgents(demo: boolean): AgentCard[] {
   const real: AgentCard[] = [

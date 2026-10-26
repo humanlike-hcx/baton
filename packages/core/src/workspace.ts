@@ -9,6 +9,7 @@ import {
   defaultAgents,
   defaultSettings,
 } from "./defaults.ts";
+import { normalizePermissions } from "./permissions.ts";
 import type { AgentCard, Thread, WorkspaceSettings } from "./types.ts";
 import { nowIso, parseFrontmatter, readJson, readText, stringifyFrontmatter, writeFileAtomic } from "./util.ts";
 
@@ -125,7 +126,7 @@ export class Workspace {
       provider: data.provider ?? "demo",
       model: data.model ?? "",
       roles: data.roles ?? [],
-      permissions: { write: false, exec: "ask", network: "deny", ...data.permissions },
+      permissions: normalizePermissions(data.permissions),
       costTier: data.costTier ?? 2,
       enabled: data.enabled ?? true,
       body,

@@ -105,7 +105,8 @@ function taskCard(input: BriefingInput): string {
   const lines = ["# 任务卡", `- 角色：${ROLE_LABEL[role]}`, `- 你是：${agent.name}`];
   if (role === "chat") {
     if (thread) lines.push(`- 对话：${thread.title}`);
-    lines.push(`- 写权限：${agent.permissions.write ? "已开放（仅本线程；开始前已自动快照）" : "只读，不能改文件、不能执行命令"}`);
+    const write = { allow: "已开放（仅本线程；开始前已自动快照）", ask: "已开放（仅本线程；每次改文件前需要用户确认）", deny: "只读，不能改文件、不能执行命令" };
+    lines.push(`- 写权限：${write[agent.permissions.write]}`);
     if (input.task) lines.push("", "## 用户消息", input.task.trim());
     return lines.join("\n");
   }

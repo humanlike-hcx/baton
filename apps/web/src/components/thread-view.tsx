@@ -176,7 +176,7 @@ function ChatControls({ thread, agents, agentId, onAgent }: { thread: Thread; ag
       <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground" title="只对这个线程有效；每次回复前自动快照，服务重启后收回">
         <Switch size="sm" checked={open} disabled={busy || replying} onCheckedChange={(on) => void toggle(on)} />
         允许改文件（仅本线程）
-        {open && agent && !agent.permissions.write && <span className="text-amber-700 dark:text-amber-300">· {agent.name} 本身没有写权限</span>}
+        {open && agent && agent.permissions.write === "deny" && <span className="text-amber-700 dark:text-amber-300">· {agent.name} 本身没有写权限</span>}
       </label>
     </div>
   );
