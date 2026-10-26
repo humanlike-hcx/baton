@@ -219,7 +219,11 @@ export function createApp(state: AppState): Hono {
     return c.json(thread);
   });
   app.delete("/api/threads/:id", (c) => {
-    state.orchestrator.deleteThread(c.req.param("id"));
+    try {
+      state.orchestrator.deleteThread(c.req.param("id"));
+    } catch (error) {
+      bad((error as Error).message);
+    }
     return c.json({ ok: true });
   });
   app.post("/api/threads/:id/messages", async (c) => {
@@ -246,7 +250,7 @@ export function createApp(state: AppState): Hono {
   });
   app.post("/api/threads/:id/decisions/:decisionId", async (c) => {
     const input = await body<{ approve: boolean; agentId?: string }>(c);
-    await state.orchestrator.decide(c.req.param("id"), c.req.param("decisionId"), input);
+    await state.orchestrator.decide(c.req.param("id"), c.req.param("decisionId"), input).catch((e: Error) => bad(e.message));
     return c.json({ ok: true });
   });
   app.post("/api/threads/:id/cancel", (c) => {
@@ -255,7 +259,11 @@ export function createApp(state: AppState): Hono {
   });
   app.post("/api/approvals/:id", async (c) => {
     const { allow } = await body<{ allow: boolean }>(c);
-    state.orchestrator.respondApproval(c.req.param("id"), Boolean(allow));
+    try {
+      state.orchestrator.respondApproval(c.req.param("id"), Boolean(allow));
+    } catch (error) {
+      bad((error as Error).message);
+    }
     return c.json({ ok: true });
   });
   app.get("/api/runs/:id/diff", async (c) => c.json({ diff: await state.orchestrator.runDiff(c.req.param("id")) }));
