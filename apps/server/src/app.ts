@@ -14,6 +14,7 @@ import {
   type Role,
   type Stage,
   type Thread,
+  type ThreadKind,
   type WorkspaceSettings,
 } from "@baton/core";
 import { Hono, type Context } from "hono";
@@ -32,7 +33,7 @@ export function allowWebSocket(req: { url?: string; host?: string; origin?: stri
 }
 
 function threadSummary(t: Thread) {
-  return { id: t.id, title: t.title, stage: t.stage, status: t.status, updatedAt: t.updatedAt, pending: t.pending?.title, runs: t.runs.length };
+  return { id: t.id, kind: t.kind, title: t.title, stage: t.stage, status: t.status, updatedAt: t.updatedAt, pending: t.pending?.title, runs: t.runs.length };
 }
 
 async function body<T>(c: Context): Promise<T> {
@@ -184,7 +185,7 @@ export function createApp(state: AppState): Hono {
   });
   app.get("/api/agents/:id/briefing", async (c) => {
     const role = (c.req.query("role") ?? "implement") as Role;
-    if (!["plan", "implement", "review", "advisor"].includes(role)) bad("role 不合法");
+    if (!["plan", "implement", "review", "advisor", "chat"].includes(role)) bad("role 不合法");
     return c.json(await state.orchestrator.briefingPreview(c.req.param("id"), role, c.req.query("thread") || undefined));
   });
 
@@ -200,11 +201,16 @@ export function createApp(state: AppState): Hono {
 
   app.get("/api/threads", (c) => c.json(state.orchestrator.listThreads().map(threadSummary)));
   app.post("/api/threads", async (c) => {
-    const input = await body<{ title: string; task: string; acceptance: string[]; stage?: Stage; agentId?: string }>(c);
+    const input = await body<{ kind?: ThreadKind; title?: string; task?: string; acceptance?: string[]; stage?: Stage; agentId?: string }>(c);
+    if (input.kind && !["relay", "chat"].includes(input.kind)) bad("线程类型只能是 relay 或 chat");
+    if (input.kind === "chat") {
+      if (!input.agentId || !state.ws.getAgent(input.agentId)) bad("请选择一个 agent");
+      return c.json(state.orchestrator.createThread({ kind: "chat", title: input.title ?? "", task: input.task ?? "", acceptance: [], agentId: input.agentId }));
+    }
     if (input.stage && !["plan", "implement", "review"].includes(input.stage)) bad("起始阶段不合法");
     if (!input.title?.trim()) bad("请填写标题");
     if (!input.acceptance?.some((a) => a.trim())) bad("至少需要一条验收标准");
-    const thread = state.orchestrator.createThread({ ...input, acceptance: input.acceptance });
+    const thread = state.orchestrator.createThread({ ...input, kind: "relay", title: input.title, task: input.task ?? "", acceptance: input.acceptance });
     return c.json(thread);
   });
   app.get("/api/threads/:id", (c) => {
@@ -217,9 +223,25 @@ export function createApp(state: AppState): Hono {
     return c.json({ ok: true });
   });
   app.post("/api/threads/:id/messages", async (c) => {
-    const { text } = await body<{ text: string }>(c);
+    const { text, agentId } = await body<{ text: string; agentId?: string }>(c);
     if (!text?.trim()) bad("消息不能为空");
-    state.orchestrator.postMessage(c.req.param("id"), text);
+    const thread = state.orchestrator.getThread(c.req.param("id"));
+    if (!thread) throw new HTTPException(404, { message: "找不到线程" });
+    if (agentId && thread.kind !== "chat") bad("接力线程由工作台按规则挑选 agent，不能指定回复的 agent");
+    if (agentId && !state.ws.getAgent(agentId)) bad(`找不到 agent ${agentId}`);
+    state.orchestrator.postMessage(thread.id, text, agentId);
+    return c.json({ ok: true });
+  });
+  app.post("/api/threads/:id/write", async (c) => {
+    const { allow } = await body<{ allow: boolean }>(c);
+    const thread = state.orchestrator.getThread(c.req.param("id"));
+    if (!thread) throw new HTTPException(404, { message: "找不到线程" });
+    if (thread.kind !== "chat") bad("只有对话线程可以临时开放写权限");
+    try {
+      state.orchestrator.setChatWrite(thread.id, Boolean(allow));
+    } catch (error) {
+      bad((error as Error).message);
+    }
     return c.json({ ok: true });
   });
   app.post("/api/threads/:id/decisions/:decisionId", async (c) => {

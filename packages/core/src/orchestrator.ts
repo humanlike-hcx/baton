@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { formatChecks, runChecks } from "./checks.ts";
-import { STAGE_LABEL, compileBriefing } from "./context.ts";
+import { CHAT_RECENT_TURNS, STAGE_LABEL, chatTurns, compileBriefing } from "./context.ts";
 import type { AcpExecutor } from "./executors/acp.ts";
 import type { PiExecutor } from "./executors/pi.ts";
 import type { ExecutorEvent, McpLaunch } from "./executors/types.ts";
@@ -12,6 +12,7 @@ import {
   ADVISOR_TRIGGER_LABEL,
   USD_TO_CNY,
   advisorTrigger,
+  chatPermissions,
   isStall,
   lastRun,
   needsEscalationApproval,
@@ -33,6 +34,7 @@ import type {
   RunRecord,
   Stage,
   Thread,
+  ThreadKind,
   TimelineItem,
 } from "./types.ts";
 import { estimateTokens, newId, nowIso, truncateMiddle, writeFileAtomic } from "./util.ts";
@@ -77,10 +79,13 @@ interface QueuedRun {
 }
 
 export interface NewThreadInput {
+  kind?: ThreadKind;
   title: string;
+  /** Relay: the task. Chat: the first message (optional). */
   task: string;
   acceptance: string[];
   stage?: Stage;
+  /** Relay: first agent for the starting stage. Chat: the agent to talk to (required). */
   agentId?: string;
 }
 
@@ -99,13 +104,21 @@ export class Orchestrator {
     this.shadow = new ShadowGit(this.ws.root, this.ws.path("shadow.git"));
     for (const thread of this.ws.listThreads()) {
       const t = migrateThread(thread);
+      let changed = false;
       if (t.status === "running" || t.status === "waiting") {
         t.status = "paused";
-        this.push(t, { kind: "notice", level: "warn", text: "工作台重启，上一次运行被中断。发消息即可从当前阶段继续。" }, false);
+        const text = t.kind === "chat" ? "工作台重启，上一次回复被中断。再发一条消息即可继续。" : "工作台重启，上一次运行被中断。发消息即可从当前阶段继续。";
+        this.push(t, { kind: "notice", level: "warn", text }, false);
         for (const item of t.items) if (item.kind === "approval" && item.status === "pending") item.status = "expired";
         for (const run of t.runs) if (run.status === "running") run.status = "cancelled";
-        this.ws.saveThread(t);
+        changed = true;
       }
+      if (t.kind === "chat" && t.approvedLevel >= 2) {
+        t.approvedLevel = 0;
+        this.push(t, { kind: "notice", level: "info", text: "工作台重启，已收回这个对话的写权限。需要时重新开放。" }, false);
+        changed = true;
+      }
+      if (changed) this.ws.saveThread(t);
       this.threads.set(t.id, t);
     }
   }
@@ -154,33 +167,20 @@ export class Orchestrator {
   // ---------- threads ----------
 
   createThread(input: NewThreadInput): Thread {
+    if (input.kind === "chat") return this.createChat(input);
     const title = input.title.trim();
     const acceptance = input.acceptance.map((a) => a.trim()).filter(Boolean);
     if (!title) throw new Error("请填写标题");
     if (!acceptance.length) throw new Error("至少需要一条验收标准");
     const settings = this.ws.settings();
-    const thread: Thread = {
-      id: newId("th"),
+    const thread = newThread({
+      kind: "relay",
       title,
       task: input.task.trim() || title,
       acceptance,
       stage: input.stage ?? "plan",
-      status: "idle",
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-      hops: 0,
-      sendBacks: 0,
-      stalls: 0,
-      summary: "",
-      runs: [],
-      items: [],
-      pinnedAgents: {},
-      spend: { deepseekCny: 0, chatgptRuns: 0, cursorRuns: 0 },
-      reviewIssueRounds: 0,
       approvedLevel: settings.confirm.planToImplement ? 0 : 2,
-      extraHops: 0,
-      notes: [],
-    };
+    });
     if (input.agentId) thread.pinnedAgents[thread.stage] = input.agentId;
     this.threads.set(thread.id, thread);
     this.push(thread, { kind: "user", text: `${thread.task}\n\n验收标准：\n${acceptance.map((a, i) => `${i + 1}. ${a}`).join("\n")}` }, false);
@@ -190,6 +190,37 @@ export class Orchestrator {
     return thread;
   }
 
+  /** A chat thread: no stages, no acceptance criteria; read-only until the user opens writes. */
+  private createChat(input: NewThreadInput): Thread {
+    const agent = input.agentId ? this.ws.getAgent(input.agentId) : undefined;
+    if (!agent) throw new Error("请选择一个 agent");
+    const message = input.task.trim();
+    const title = input.title.trim() || message.replace(/\s+/g, " ").slice(0, 40) || "新对话";
+    const thread = newThread({ kind: "chat", title, task: title, acceptance: [], stage: "chat", approvedLevel: 0 });
+    thread.pinnedAgents.chat = agent.id;
+    this.threads.set(thread.id, thread);
+    this.save(thread);
+    this.options.onEvent({ type: "threads" });
+    if (message) this.postMessage(thread.id, message);
+    return thread;
+  }
+
+  /** Opens or closes writes (and commands) for one chat thread. Lasts until closed or the service restarts. */
+  setChatWrite(threadId: string, allow: boolean): void {
+    const thread = this.mustThread(threadId);
+    if (thread.kind !== "chat") throw new Error("只有对话线程可以临时开放写权限");
+    if (this.active.has(threadId)) throw new Error("正在回复，等这一轮结束再切换写权限");
+    if ((thread.approvedLevel >= 2) === allow) return;
+    thread.approvedLevel = allow ? 2 : 0;
+    this.notice(
+      thread,
+      allow ? "warn" : "info",
+      allow
+        ? "已为这个对话开放写权限：agent 可以改文件、执行命令（命令照常审批），每次回复前自动快照，可以随时回滚。只对本线程有效，服务重启后自动收回。"
+        : "已收回写权限，对话恢复只读。",
+    );
+  }
+
   deleteThread(id: string): void {
     if (this.active.has(id)) throw new Error("线程正在运行，先取消");
     this.threads.delete(id);
@@ -197,11 +228,16 @@ export class Orchestrator {
     this.options.onEvent({ type: "threads" });
   }
 
-  /** User message: queued as a note for the next run, or restarts a paused/finished thread. */
-  postMessage(threadId: string, text: string): void {
+  /**
+   * User message. Relay: queued as a note for the next run, or restarts a paused/finished thread.
+   * Chat: answered by `agentId` (switching the thread's agent) or by the thread's current agent.
+   */
+  postMessage(threadId: string, text: string, agentId?: string): void {
     const thread = this.mustThread(threadId);
     const body = text.trim();
     if (!body) return;
+    if (thread.kind === "chat") return this.postChat(thread, body, agentId);
+    if (agentId) throw new Error("接力线程由工作台按规则挑选 agent，不能指定回复的 agent");
     this.push(thread, { kind: "user", text: body });
     thread.notes.push(body);
     if (this.active.has(threadId) || thread.pending) {
@@ -211,6 +247,39 @@ export class Orchestrator {
     const stage: Stage = thread.stage === "done" ? "implement" : thread.stage;
     thread.stalls = 0;
     void this.begin(thread, stage, { userInitiated: true });
+  }
+
+  private postChat(thread: Thread, body: string, agentId?: string): void {
+    if (agentId && agentId !== thread.pinnedAgents.chat) {
+      const agent = this.ws.getAgent(agentId);
+      if (!agent) throw new Error(`找不到 agent ${agentId}`);
+      const previous = thread.pinnedAgents.chat ? this.ws.getAgent(thread.pinnedAgents.chat)?.name : undefined;
+      thread.pinnedAgents.chat = agent.id;
+      this.push(thread, { kind: "notice", level: "info", text: `换成 ${agent.name} 接着聊${previous ? `（之前是 ${previous}）` : ""}。它会看到前面对话的摘要和最近几轮原文。` }, false);
+    }
+    this.push(thread, { kind: "user", text: body });
+    thread.notes.push(body);
+    if (this.active.has(thread.id) || thread.status === "waiting") {
+      this.notice(thread, "info", "已记下，这一轮回复结束后接着回复。");
+      return;
+    }
+    void this.beginChat(thread);
+  }
+
+  /** Runs the thread's chosen agent on the queued messages, if its account and quota allow. */
+  private async beginChat(thread: Thread): Promise<void> {
+    const agentId = thread.pinnedAgents.chat;
+    const selection = selectAgent("chat", { thread, agents: this.ws.listAgents(), settings: this.ws.settings(), available: this.options.available });
+    const agent = selection.candidates.find((a) => a.id === agentId);
+    if (!agent) {
+      const known = agentId ? this.ws.getAgent(agentId) : undefined;
+      const reason = selection.rejected.find((r) => r.id === agentId)?.reason ?? "找不到这个 agent";
+      thread.status = "paused";
+      this.notice(thread, "error", `${known?.name ?? agentId ?? "agent"} 现在不能回复：${reason}。换一个 agent 再发一次即可。`);
+      return;
+    }
+    thread.status = "running";
+    await this.startRun(thread, agent, "chat", { sendBack: false });
   }
 
   cancel(threadId: string): void {
@@ -331,15 +400,16 @@ export class Orchestrator {
       return;
     }
     const role = roleForStage(stage);
-    if (role === "implement" && this.writeLock && this.writeLock !== thread.id) {
+    const writes = role === "implement" || (role === "chat" && chatPermissions(thread, agent).write);
+    if (writes && this.writeLock && this.writeLock !== thread.id) {
       thread.status = "waiting";
       this.writeQueue.push({ threadId: thread.id, run: { agentId: agent.id, stage, sendBack: opts.sendBack } });
-      this.notice(thread, "info", "同一工作区同时只能有一个写运行，已排队，等另一个线程的实现结束后自动开始。");
+      this.notice(thread, "info", "同一工作区同时只能有一个写运行，已排队，等另一个写运行结束后自动开始。");
       return;
     }
     if (opts.sendBack) thread.sendBacks++;
     thread.stage = stage;
-    if (role === "implement") this.writeLock = thread.id;
+    if (writes) this.writeLock = thread.id;
     try {
       await this.executeRun(thread, agent, role);
     } finally {
@@ -356,6 +426,7 @@ export class Orchestrator {
   }
 
   private taskFor(thread: Thread, role: Role): { task: string; extra?: string } {
+    if (role === "chat") return { task: thread.notes.join("\n\n") || "（用户的下一条消息）" };
     const notes = thread.notes.length ? `## 用户补充\n${thread.notes.map((n) => `- ${n}`).join("\n")}` : "";
     const prevReview = lastRun(thread, "review");
     if (role === "plan") return { task: `为下面的任务制定方案，然后用 handoff_to 提议下一阶段：\n\n${thread.task}`, extra: notes };
@@ -369,7 +440,8 @@ export class Orchestrator {
     return { task: `对照验收标准检查实现：\n\n${thread.task}`, extra: notes };
   }
 
-  private async executeRun(thread: Thread, agent: AgentCard, role: Role, advisor?: { card: AdvisorCard }): Promise<RunRecord | undefined> {
+  private async executeRun(thread: Thread, card: AgentCard, role: Role, advisor?: { card: AdvisorCard }): Promise<RunRecord | undefined> {
+    const agent = role === "chat" ? { ...card, permissions: chatPermissions(thread, card) } : card;
     const stage = thread.stage;
     const settings = this.ws.settings();
     let checksResults: RunRecord["checks"];
@@ -426,6 +498,7 @@ export class Orchestrator {
       decisions: 0,
       finalText: "",
       checks: checksResults,
+      prompt: role === "chat" ? task : undefined,
     };
     try {
       run.snapshotBefore = await this.shadow.snapshot(`before ${run.id} ${agent.id} ${stage}`);
@@ -535,7 +608,7 @@ export class Orchestrator {
 
     if (role !== "advisor" && result.status !== "cancelled") {
       if (!handoffDraft) {
-        handoffDraft = await this.autoHandoff(run, result.finalText, run.changedFiles);
+        handoffDraft = role === "chat" ? chatHandoff(task, result.finalText, run.changedFiles) : await this.autoHandoff(run, result.finalText, run.changedFiles);
         run.handoff = { ...handoffDraft, runId: run.id, threadId: thread.id, agentId: agent.id, stage, createdAt: nowIso(), auto: true };
       } else {
         run.handoff = { ...handoffDraft, runId: run.id, threadId: thread.id, agentId: agent.id, stage, createdAt: nowIso(), auto: false };
@@ -543,17 +616,21 @@ export class Orchestrator {
       const missing = run.changedFiles.filter((f) => !run.handoff!.files.includes(f));
       if (missing.length) run.handoff.files = [...run.handoff.files, ...missing];
       saveHandoff(this.ws, run.handoff);
-      this.push(thread, { kind: "handoff", runId: run.id, handoff: run.handoff }, false);
+      // In a chat the reply itself is on the timeline; the handoff only feeds later briefings.
+      if (role !== "chat") this.push(thread, { kind: "handoff", runId: run.id, handoff: run.handoff }, false);
     }
     if (result.status === "failed") this.push(thread, { kind: "notice", level: "error", text: `运行失败：${result.error ?? "未知错误"}` }, false);
     this.push(thread, { kind: "run_end", runId: run.id, status: run.status, changedFiles: run.changedFiles, usage: run.usage, error: run.error }, false);
     if (role !== "advisor") {
-      thread.stalls = result.status === "succeeded" && isStall(run) ? thread.stalls + 1 : result.status === "succeeded" ? 0 : thread.stalls;
+      if (role !== "chat") thread.stalls = result.status === "succeeded" && isStall(run) ? thread.stalls + 1 : result.status === "succeeded" ? 0 : thread.stalls;
       thread.notes = thread.notes.slice(consumedNotes);
-      thread.summary = rollSummary(thread);
+      thread.summary = role === "chat" ? rollChatSummary(thread) : rollSummary(thread);
     }
+    if (role === "chat") thread.status = "idle";
     this.save(thread);
-    if (role !== "advisor") await this.afterRun(thread, run);
+    if (role === "chat") {
+      if (run.status !== "cancelled" && thread.notes.length) await this.beginChat(thread);
+    } else if (role !== "advisor") await this.afterRun(thread, run);
     return run;
   }
 
@@ -706,6 +783,10 @@ export class Orchestrator {
     await this.shadow.snapshot(`before rollback to ${runId}`);
     const files = await this.shadow.rollback(found.run.snapshotBefore);
     const { thread, run } = found;
+    if (thread.kind === "chat") {
+      this.notice(thread, "warn", `已回滚到「${run.agentName}」这次回复之前，恢复了 ${files.length} 个文件。`);
+      return files;
+    }
     thread.stage = run.stage;
     thread.status = "paused";
     this.notice(thread, "warn", `已回滚到「${run.agentName}」这次运行之前，恢复了 ${files.length} 个文件。发消息说明要怎么改，线程会从「${STAGE_LABEL[run.stage]}」重新开始。`);
@@ -823,15 +904,57 @@ function emptyRow(run: RunRecord): StatRow & { ids: Set<string> } {
   return { key: `${run.runtime}:${run.model}`, runtime: run.runtime, model: run.model, family: run.family, runs: 0, costUsd: 0, tokens: 0, stages: {}, agentIds: [], ids: new Set(), accepted: 0, declined: 0 };
 }
 
+function chatHandoff(prompt: string, reply: string, files: string[]) {
+  const said = truncateMiddle(prompt.trim(), 600).text;
+  const answered = reply.trim() ? truncateMiddle(reply.trim(), 1200).text : "（没有回复）";
+  return { done: `用户：${said}\n\n回复：${answered}`, files, remaining: "", next: "", verdict: undefined, issues: undefined };
+}
+
+const CHAT_SUMMARY_MAX_TURNS = 30;
+
+/** One line per chat turn older than the ones quoted verbatim; the oldest drop off past a cap. */
+function rollChatSummary(thread: Thread): string {
+  const older = chatTurns(thread).slice(0, -CHAT_RECENT_TURNS);
+  const oneLine = (text: string, max: number) => {
+    const flat = text.replace(/\s+/g, " ").trim();
+    return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+  };
+  const lines = older.slice(-CHAT_SUMMARY_MAX_TURNS).map((r) => `- 用户：${oneLine(r.prompt ?? "", 80)} → ${r.agentName}：${oneLine(r.finalText || "（没有回复）", 160)}`);
+  const dropped = older.length - lines.length;
+  return [dropped > 0 ? `（更早的 ${dropped} 轮已省略）` : "", ...lines].filter(Boolean).join("\n");
+}
+
 function rollSummary(thread: Thread): string {
   const withHandoff = thread.runs.filter((r) => r.handoff);
   const older = withHandoff.slice(0, -3);
   return older.map((r) => `- [${STAGE_LABEL[r.stage]} · ${r.agentName}] ${r.handoff!.done.replace(/\s+/g, " ").slice(0, 200)}`).join("\n");
 }
 
+function newThread(fields: Pick<Thread, "kind" | "title" | "task" | "acceptance" | "stage" | "approvedLevel">): Thread {
+  return {
+    id: newId("th"),
+    ...fields,
+    status: "idle",
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    hops: 0,
+    sendBacks: 0,
+    stalls: 0,
+    summary: "",
+    runs: [],
+    items: [],
+    pinnedAgents: {},
+    spend: { deepseekCny: 0, chatgptRuns: 0, cursorRuns: 0 },
+    reviewIssueRounds: 0,
+    extraHops: 0,
+    notes: [],
+  };
+}
+
 function migrateThread(t: Thread): Thread {
   return {
     ...t,
+    kind: t.kind ?? "relay",
     pinnedAgents: t.pinnedAgents ?? {},
     spend: t.spend ?? { deepseekCny: 0, chatgptRuns: 0, cursorRuns: 0 },
     reviewIssueRounds: t.reviewIssueRounds ?? 0,

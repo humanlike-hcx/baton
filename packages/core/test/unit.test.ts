@@ -34,6 +34,7 @@ function agent(partial: Partial<AgentCard> & Pick<AgentCard, "id" | "model">): A
 function thread(partial: Partial<Thread> = {}): Thread {
   return {
     id: "th_test",
+    kind: "relay",
     title: "t",
     task: "t",
     acceptance: ["a"],

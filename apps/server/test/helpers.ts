@@ -23,9 +23,11 @@ export interface ApiResponse<T> {
  * the mock Cursor CLI, and no listening port. Every response body is recorded so tests can
  * assert on what ever reached the browser.
  */
-export async function testServer(options: { autoApprove?: boolean; settings?: (s: WorkspaceSettings) => void } = {}) {
-  const home = tempDir("baton-home-");
-  const root = tempDir("baton-ws-");
+export async function testServer(
+  options: { autoApprove?: boolean; settings?: (s: WorkspaceSettings) => void; /** Restart on an earlier server's directories. */ reuse?: { home: string; root: string } } = {},
+) {
+  const home = options.reuse?.home ?? tempDir("baton-home-");
+  const root = options.reuse?.root ?? tempDir("baton-ws-");
   // Port 9 (discard) is never served, so the mock Cursor's MCP callbacks fail fast instead of reaching a dev server.
   const state = new AppState({ baseUrl: "http://127.0.0.1:9", home, workspace: root, demo: true, cursorCommand: MOCK_CURSOR_COMMAND, demoTokensPerSecond: 100_000 });
   await state.init();

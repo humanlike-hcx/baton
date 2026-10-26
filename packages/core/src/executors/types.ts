@@ -44,5 +44,10 @@ export interface Executor {
   run(req: ExecuteRequest): Promise<ExecuteResult>;
 }
 
+/** Advisors only advise; chat handoffs are recorded from the reply. Neither gets the reminder. */
+export function expectsHandoff(role: Role): boolean {
+  return role !== "advisor" && role !== "chat";
+}
+
 export const HANDOFF_REMINDER =
   "你还没有调用 write_handoff。请现在调用一次：做了什么、改了哪些文件、还剩什么、建议下一步（检查角色要给出 verdict）。不要再做别的事。";

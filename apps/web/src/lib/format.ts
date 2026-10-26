@@ -2,8 +2,8 @@ import type { AgentCard, Role, Stage, ThreadStatus } from "./types";
 
 export const STAGES: Stage[] = ["plan", "implement", "review", "done"];
 
-export const STAGE_LABEL: Record<Stage, string> = { plan: "方案", implement: "实现", review: "检查", done: "完成" };
-export const ROLE_LABEL: Record<Role, string> = { plan: "方案", implement: "实现", review: "检查", advisor: "顾问" };
+export const STAGE_LABEL: Record<Stage, string> = { plan: "方案", implement: "实现", review: "检查", done: "完成", chat: "对话" };
+export const ROLE_LABEL: Record<Role, string> = { plan: "方案", implement: "实现", review: "检查", advisor: "顾问", chat: "对话" };
 
 export const STATUS_LABEL: Record<ThreadStatus, string> = {
   idle: "待开始",
@@ -26,6 +26,7 @@ export const STAGE_TONE: Record<Stage, string> = {
   implement: "text-sky-600 dark:text-sky-300",
   review: "text-amber-600 dark:text-amber-300",
   done: "text-emerald-600 dark:text-emerald-300",
+  chat: "text-foreground",
 };
 
 export const SOURCE_LABEL: Record<AgentCard["source"], string> = {

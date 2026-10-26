@@ -19,7 +19,16 @@ export interface Selection {
 }
 
 export function roleForStage(stage: Stage): Role {
-  return stage === "plan" ? "plan" : stage === "review" ? "review" : "implement";
+  return stage === "plan" ? "plan" : stage === "review" ? "review" : stage === "chat" ? "chat" : "implement";
+}
+
+/**
+ * What an agent may do in a chat thread: read-only (no writes, no commands) unless the user
+ * opened writes for this thread, and never more than the agent's own card allows.
+ */
+export function chatPermissions(thread: Pick<Thread, "approvedLevel">, agent: AgentCard): AgentCard["permissions"] {
+  const open = thread.approvedLevel >= 2 && agent.permissions.write;
+  return { write: open, exec: open ? agent.permissions.exec : "deny", network: agent.permissions.network };
 }
 
 export function lastRun(thread: Thread, stage?: Stage): RunRecord | undefined {
@@ -55,7 +64,8 @@ export function selectAgent(stage: Stage, input: RouterInput, options: { role?: 
   const candidates: AgentCard[] = [];
   for (const agent of agents) {
     const reject = (reason: string) => rejected.push({ id: agent.id, name: agent.name, reason });
-    if (!agent.roles.includes(role)) continue;
+    // Any agent can chat; the user picks it directly.
+    if (role !== "chat" && !agent.roles.includes(role)) continue;
     if (!agent.enabled) {
       reject("已停用");
       continue;
@@ -100,6 +110,7 @@ const ALLOWED: Record<Stage, Stage[]> = {
   implement: ["review"],
   review: ["implement", "done"],
   done: [],
+  chat: [],
 };
 
 export function isStall(run: RunRecord): boolean {

@@ -456,6 +456,8 @@ const ROLE_TOOLS: Record<Role, string[]> = {
   implement: ["read_file", "list_files", "search", "edit", "write_file", "shell", "read_context", "update_context", "memory_search", "remember", "record_lesson", "write_handoff"],
   review: ["read_file", "list_files", "search", "shell", "read_context", "memory_search", "remember", "record_lesson", "write_handoff"],
   advisor: ["read_file", "list_files", "search", "read_context", "memory_search"],
+  // Write and exec tools drop out unless the user opened writes for the thread (see chatPermissions).
+  chat: ["read_file", "list_files", "search", "edit", "write_file", "shell", "read_context", "memory_search", "remember", "record_lesson"],
 };
 
 /** Tools offered to a native (Pi) run: by role, capped by the agent's permissions, edit format by family. */

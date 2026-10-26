@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { shellPolicy } from "../permissions.ts";
 import type { Risk } from "../types.ts";
-import { HANDOFF_REMINDER, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
+import { HANDOFF_REMINDER, expectsHandoff, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
 
 type Json = Record<string, any>;
 
@@ -257,7 +257,7 @@ export class AcpExecutor implements Executor {
         currentText = "";
         req.emit({ type: "text_end" });
       }
-      if (result.stopReason === "end_turn" && !req.hasHandoff() && req.role !== "advisor" && !req.signal.aborted) {
+      if (result.stopReason === "end_turn" && !req.hasHandoff() && expectsHandoff(req.role) && !req.signal.aborted) {
         req.emit({ type: "notice", level: "warn", text: "运行没有写交接，追加一次提醒。" });
         await conn.request("session/prompt", { sessionId, prompt: [{ type: "text", text: HANDOFF_REMINDER }] });
         if (currentText) {

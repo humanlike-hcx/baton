@@ -12,7 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { runTool, type ToolSpec } from "../tools.ts";
 import { demoScript } from "./demo.ts";
-import { HANDOFF_REMINDER, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
+import { HANDOFF_REMINDER, expectsHandoff, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
 
 function resultText(result: unknown): string {
   const content = (result as { content?: { type: string; text?: string }[] } | undefined)?.content;
@@ -50,7 +50,7 @@ export class PiExecutor implements Executor {
         models: [{ id: agent.model, name: agent.name, contextWindow: 128_000, maxTokens: 8_000 }],
         tokensPerSecond: this.options.demoTokensPerSecond ?? 200,
       });
-      faux.setResponses(demoScript(req.role, req.thread, req.prompt));
+      faux.setResponses(demoScript(req.role, req.thread, req.prompt, req.briefing.text));
       runtime.registerNativeProvider(faux.provider);
       cleanup = () => runtime.unregisterProvider(providerId);
       model = runtime.getModel(providerId, agent.model);
@@ -151,7 +151,7 @@ export class PiExecutor implements Executor {
     req.signal.addEventListener("abort", onAbort, { once: true });
     try {
       await session.prompt(req.prompt);
-      if (!req.signal.aborted && !lastError && !req.hasHandoff() && req.role !== "advisor") {
+      if (!req.signal.aborted && !lastError && !req.hasHandoff() && expectsHandoff(req.role)) {
         req.emit({ type: "notice", level: "warn", text: "运行没有写交接，追加一次提醒。" });
         await session.prompt(HANDOFF_REMINDER);
       }

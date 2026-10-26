@@ -6,7 +6,8 @@ import { slugify } from "../util.ts";
  * Scripted responses for the demo models, so the whole flow (tools, approvals, handoffs,
  * send-backs, rollback) runs without any account.
  */
-export function demoScript(role: Role, thread: Thread | undefined, prompt: string): FauxResponseStep[] {
+export function demoScript(role: Role, thread: Thread | undefined, prompt: string, briefing = ""): FauxResponseStep[] {
+  if (role === "chat") return demoChat(prompt, briefing);
   const title = thread?.title ?? "演示任务";
   const slug = thread ? `${slugify(thread.title, 24)}-${thread.id.slice(-4)}` : "demo";
   const note = `notes/${slug}.md`;
@@ -117,4 +118,40 @@ export function demoScript(role: Role, thread: Thread | undefined, prompt: strin
       ].join("\n"),
     ),
   ];
+}
+
+/**
+ * Demo chat: quotes the previous user turn from its own briefing (so switching agents visibly
+ * carries the conversation over), and reacts to「记住：」「查记忆：」「写文件：」.
+ */
+function demoChat(prompt: string, briefing: string): FauxResponseStep[] {
+  const toolUse = { stopReason: "toolUse" as const };
+  const recent = briefing.split("## 最近几轮原文")[1] ?? "";
+  const previous = recent.split("### 用户\n").slice(-1)[0]?.split("\n\n### ")[0]?.trim();
+  const said = `你说「${prompt.trim().slice(0, 60)}」`;
+  const reply = previous && recent ? `（演示对话）接着前面的话题：上一轮用户说「${previous.slice(0, 60)}」。这一轮${said}。` : `（演示对话）收到，${said}。`;
+
+  const memo = /记住[:：]\s*(.+)/.exec(prompt)?.[1]?.trim();
+  if (memo) {
+    return [
+      fauxAssistantMessage([fauxText("先写进共享记忆。"), fauxToolCall("remember", { kind: "fact", text: memo })], toolUse),
+      fauxAssistantMessage(`${reply}\n\n已经记下：${memo}`),
+    ];
+  }
+  const query = /查记忆[:：]\s*(.+)/.exec(prompt)?.[1]?.trim();
+  if (query) {
+    return [
+      fauxAssistantMessage([fauxToolCall("memory_search", { query })], toolUse),
+      fauxAssistantMessage(`${reply}\n\n查过共享记忆了，结果见上面的工具输出。`),
+    ];
+  }
+  const target = /写文件[:：]\s*(\S+)/.exec(prompt)?.[1];
+  if (target) {
+    return [
+      fauxAssistantMessage([fauxText(`试着写 ${target}。`), fauxToolCall("write_file", { path: target, content: `# 对话里写的文件\n\n${prompt.trim()}\n` })], toolUse),
+      fauxAssistantMessage([fauxToolCall("shell", { command: `wc -l ${target}` })], toolUse),
+      fauxAssistantMessage(`${reply}\n\n写文件的结果见上面的工具调用。`),
+    ];
+  }
+  return [fauxAssistantMessage(reply)];
 }

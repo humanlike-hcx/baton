@@ -1,5 +1,7 @@
-export type Stage = "plan" | "implement" | "review" | "done";
-export type Role = "plan" | "implement" | "review" | "advisor";
+/** Relay stages, plus "chat" for every run of a chat thread (which has no stages). */
+export type Stage = "plan" | "implement" | "review" | "done" | "chat";
+export type Role = "plan" | "implement" | "review" | "advisor" | "chat";
+export type ThreadKind = "relay" | "chat";
 export type RuntimeKind = "pi" | "cursor";
 export type CredentialSource = "chatgpt" | "deepseek" | "cursor" | "demo";
 export type Policy = "allow" | "ask" | "deny";
@@ -143,6 +145,8 @@ export interface RunRecord {
   error?: string;
   proposedNext?: { stage: Stage; reason: string; acceptance: string[] };
   checks?: CheckResult[];
+  /** Chat runs: the user's message(s) this run answered. */
+  prompt?: string;
 }
 
 export type CheckStatus = "pass" | "fail" | "skipped" | "error";
@@ -203,6 +207,7 @@ export interface AdvisorCard {
 
 export interface Thread {
   id: string;
+  kind: ThreadKind;
   title: string;
   task: string;
   acceptance: string[];
@@ -217,11 +222,11 @@ export interface Thread {
   runs: RunRecord[];
   items: TimelineItem[];
   pending?: PendingDecision;
-  /** Preferred agent per stage, chosen by the user. */
+  /** Preferred agent per stage, chosen by the user. Chat threads keep the agent that replies under "chat". */
   pinnedAgents: Partial<Record<Stage, string>>;
   spend: { deepseekCny: number; chatgptRuns: number; cursorRuns: number };
   reviewIssueRounds: number;
-  /** Highest agent permission level the user has consented to in this thread. */
+  /** Highest agent permission level the user has consented to in this thread. Chat threads may write only at ≥ 2. */
   approvedLevel: number;
   /** Extra automatic hops granted by the user after hitting the hop limit. */
   extraHops: number;
