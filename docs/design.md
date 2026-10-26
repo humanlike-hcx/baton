@@ -31,7 +31,7 @@ AGENTS.md                 # 公共规则，Pi 和 Cursor 都会读；由工作�
 .cursor/mcp.json          # 工作台写入 baton MCP 服务
 .baton/
   workspace.json          # 工作区设置：检查命令、权限默认值、上限
-  CONTEXT.md              # 房间上下文，约 2k token 预算
+  CONTEXT.md              # 房间上下文，整理预算默认 6KB，硬上限 8KB
   rules/
     base.md               # 共用底座
     role-plan.md          # 各阶段角色规则
@@ -46,6 +46,7 @@ AGENTS.md                 # 公共规则，Pi 和 Cursor 都会读；由工作�
   lessons/*.md            # 教训单
   handoffs/<线程>/<运行>.md
   threads/<线程>.json     # 线程与运行元数据
+  tidy/<整理>.json        # 房间上下文的整理记录（整理前后原文、移进记忆的条目）
   sessions/               # Pi 会话 JSONL、ACP 事件日志（原始记录，长期保留）
   audit.jsonl             # 工具调用与审批审计
   shadow.git/             # 影子 Git，用于快照、diff、回滚
@@ -78,7 +79,13 @@ AGENTS.md                 # 公共规则，Pi 和 Cursor 都会读；由工作�
 
 - 运行内：Pi 自带压缩（超过「窗口 − 16k」触发，保留最近约 20k token，结构化摘要）。每次压缩结束（`compaction_end`）时，从摘要里取出「已完成 / 进行中、受阻 / 下一步」存成这次运行的交接草稿（`RunRecord.progress`）。写交接时补上 agent 交接里漏掉的已完成项，「还剩什么」「建议下一步」为空时用草稿填；没写交接时自动生成的交接也带上草稿。Cursor 的压缩由它自己负责。
 - 跨运行：agent 之间不传原始对话。线程保留最近三条交接原文，更早的滚进线程摘要。
-- `CONTEXT.md` 超预算时，整理员（Pi + DeepSeek）合并重复、把过时细节移进记忆，改动有 diff，可撤销。
+- `CONTEXT.md` 超预算时，整理员（Pi + DeepSeek）合并重复、把过时细节移进记忆，改动有 diff，可撤销：
+  - 预算是设置里的 `budgets.context`（默认 6KB），不能超过 8KB 的硬上限；超过硬上限的写入直接拒绝。
+  - 触发：任何一次写 `CONTEXT.md`（界面保存、agent 的 `update_context`）后，超预算就在后台自动整理；上下文页也可以手动「现在整理」。调低预算时也会检查一次。
+  - 整理员是一次模型调用（`PiExecutor.complete`，真实工作区用 `deepseek-v4-pro`，演示工作区用脚本化的假模型），输入当前上下文、预算和已有记忆，输出 `{context, memories, summary}` 的 JSON。结果超预算、格式不对、或整理期间上下文又被改过，都放弃这次整理，原文不动。
+  - 生效时先把细节逐条写进记忆（照常查重，被拒的记下原因），再写回 `CONTEXT.md`。每次整理存一份记录在 `.baton/tidy/<id>.json`，带整理前后原文，上下文页据此显示 diff。
+  - 撤销：只能撤销最近一次生效的整理，而且整理后上下文没再改过；撤销时写回原文，把这次移进记忆的条目标为过时。被撤销或整理失败的那份原文不会再被自动整理，避免来回打转。
+  - 没有 DeepSeek key（或关闭了记忆）时不整理，上下文页说明原因。整理的花费记在整理记录里，不计入任何线程的额度。
 
 ## 5. 记忆、交接、教训
 

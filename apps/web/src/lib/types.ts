@@ -13,6 +13,8 @@ export type {
   Thread,
   ThreadKind,
   ThreadStatus,
+  TidyRecord,
+  TidyStatus,
   TimelineItem,
   WorkspaceSettings,
 } from "@baton/core/types";

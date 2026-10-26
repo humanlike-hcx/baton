@@ -207,6 +207,40 @@ function demoRelayDraft(briefing: string): string {
   return `\`\`\`json\n${JSON.stringify(draft, null, 2)}\n\`\`\``;
 }
 
+/** One-off completions in the demo; today only the context tidier asks. */
+export function demoComplete(prompt: string): string {
+  const context = /<context>\n([\s\S]*)\n<\/context>/.exec(prompt)?.[1];
+  return context === undefined ? "（演示模型）" : demoTidy(context);
+}
+
+/**
+ * Drops repeated lines and moves long bullets (details) into memory, keeping headings that still
+ * have content.「不按格式」in the context makes it answer in prose instead.
+ */
+function demoTidy(context: string): string {
+  if (context.includes("不按格式")) return "（演示整理员）我觉得可以把细节挪到记忆里，但这次先不给结果。";
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  const memories: { kind: "fact"; text: string }[] = [];
+  let duplicates = 0;
+  for (const line of context.split("\n")) {
+    const key = line.trim().replace(/^[-*]\s*/, "");
+    if (key && !line.trim().startsWith("#")) {
+      if (seen.has(key)) {
+        duplicates++;
+        continue;
+      }
+      seen.add(key);
+    }
+    if (/^\s*[-*]\s/.test(line) && key.length > 40) memories.push({ kind: "fact", text: key });
+    else kept.push(line);
+  }
+  const lines = kept.filter((line, i) => !(line.startsWith("#") && (kept.slice(i + 1).find((l) => l.trim()) ?? "#").startsWith("#") && i > 0));
+  const tidied = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  const result = { context: tidied, memories, summary: `合并了 ${duplicates} 行重复内容，把 ${memories.length} 条细节移进了记忆。` };
+  return `\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\``;
+}
+
 /**
  * Demo chat: quotes the previous user turn from its own briefing (so switching agents visibly
  * carries the conversation over), and reacts to「记住：」「查记忆：」「写文件：」.

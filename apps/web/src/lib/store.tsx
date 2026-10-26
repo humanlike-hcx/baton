@@ -6,6 +6,7 @@ type ServerMessage =
   | { type: "hello" }
   | { type: "state" }
   | { type: "threads" }
+  | { type: "tidy" }
   | { type: "thread"; thread: Thread }
   | { type: "delta"; threadId: string; itemId: string; delta: string };
 

@@ -16,6 +16,7 @@ export * from "./router.ts";
 export * from "./cursor-cli.ts";
 export * from "./orchestrator.ts";
 export * from "./promote.ts";
+export * from "./tidy.ts";
 export * from "./executors/types.ts";
 export { PiExecutor } from "./executors/pi.ts";
 export { AcpExecutor, AcpConnection, splitCommand } from "./executors/acp.ts";

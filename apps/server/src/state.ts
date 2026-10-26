@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { AuthPrompt } from "@earendil-works/pi-ai";
 import {
   AcpExecutor,
+  ContextTidier,
   FileCredentialStore,
   Orchestrator,
   PiExecutor,
@@ -20,6 +21,7 @@ import {
   type CursorModel,
   type CursorStatus,
   type OrchestratorEvent,
+  type TidyModel,
 } from "@baton/core";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -74,6 +76,7 @@ export class AppState {
   readonly pi: PiExecutor;
   readonly acp = new AcpExecutor();
   orchestrator!: Orchestrator;
+  tidier!: ContextTidier;
   demo = false;
   private persisted: Persisted;
   private auth = { chatgpt: false, deepseek: false };
@@ -144,6 +147,12 @@ export class AppState {
       mcpLaunch: (token) => ({ command: process.execPath, args: [MCP_BIN], env: { ...NODE_ENV_VARS, BATON_URL: this.baseUrl, BATON_TOKEN: token } }),
       summarize: (prompt) => this.summarize(prompt),
     });
+    this.tidier = new ContextTidier(ws, {
+      model: () => this.tidyModel(),
+      unavailableReason: () => "整理员用 DeepSeek，请先到「设置 → 账号」里填 DeepSeek API key",
+      onChange: () => this.broadcast({ type: "tidy" }),
+    });
+    ws.onContextWrite = () => this.tidier.maybeAuto();
     this.persisted.lastWorkspace = ws.root;
     this.persisted.recent = [ws.root, ...this.persisted.recent.filter((r) => r !== ws.root)].slice(0, 8);
     writeFileAtomic(path.join(this.home, "state.json"), JSON.stringify(this.persisted, null, 2));
@@ -293,6 +302,16 @@ export class AppState {
       .getModels(provider)
       .filter((m) => provider !== "openai" || /^(gpt-5|gpt-6|o3|o4)/.test(m.id))
       .map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow }));
+  }
+
+  private tidyModel(): TidyModel | undefined {
+    const demo = this.demo;
+    if (!demo && !this.auth.deepseek) return undefined;
+    const model = demo ? "demo-tidy" : "deepseek-v4-pro";
+    return {
+      name: model,
+      complete: (system, prompt) => this.pi.complete({ demo, provider: "deepseek", model, system, prompt }),
+    };
   }
 
   private async summarize(prompt: string): Promise<string | undefined> {

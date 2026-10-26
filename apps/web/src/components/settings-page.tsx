@@ -412,11 +412,11 @@ function ChecksTab() {
   );
 }
 
-function NumberField({ label, value, onChange, hint, step = 1, min = 0 }: { label: string; value: number; onChange: (n: number) => void; hint?: string; step?: number; min?: number }) {
+function NumberField({ label, value, onChange, hint, step = 1, min = 0, max }: { label: string; value: number; onChange: (n: number) => void; hint?: string; step?: number; min?: number; max?: number }) {
   return (
     <div className="space-y-1">
       <Label className="text-sm">{label}</Label>
-      <Input type="number" min={min} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-32" />
+      <Input type="number" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} className="w-32" />
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
@@ -467,8 +467,8 @@ function RelayTab() {
           <NumberField label="Cursor 运行次数" value={draft.limits.cursorRunsPerThread} onChange={(n) => limits({ cursorRunsPerThread: n })} />
         </div>
       </Section>
-      <Section title="启动上下文预算" description="每次运行注入的规则、上下文、记忆和交接的总量上限。超了就拦下，提醒你精简，而不是悄悄截断。">
-        <div className="grid gap-4 sm:grid-cols-2">
+      <Section title="启动上下文预算" description="每次运行注入的规则、上下文、记忆和交接的总量上限。超了就拦下，提醒你精简，而不是悄悄截断。房间上下文超过自己的预算时，整理员（DeepSeek）会自动整理。">
+        <div className="grid gap-4 sm:grid-cols-3">
           <NumberField
             label="方案/顾问（字节）"
             value={draft.budgets.planner}
@@ -484,6 +484,15 @@ function RelayTab() {
             step={1024}
             min={2048}
             hint={kb(draft.budgets.executor)}
+          />
+          <NumberField
+            label="房间上下文（字节）"
+            value={draft.budgets.context}
+            onChange={(n) => setDraft({ ...draft, budgets: { ...draft.budgets, context: n } })}
+            step={512}
+            min={1024}
+            max={8192}
+            hint={`${kb(draft.budgets.context)}，上限 8KB`}
           />
         </div>
       </Section>

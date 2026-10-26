@@ -164,8 +164,12 @@ export class Workspace {
     return readText(this.path("CONTEXT.md"));
   }
 
+  /** Called after every write to CONTEXT.md, whoever made it (the UI, an agent's tool, the tidier). */
+  onContextWrite?: () => void;
+
   writeContext(text: string): void {
     writeFileAtomic(this.path("CONTEXT.md"), text.endsWith("\n") ? text : `${text}\n`);
+    this.onContextWrite?.();
   }
 
   listThreads(): Thread[] {

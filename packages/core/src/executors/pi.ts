@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { CredentialStore } from "@earendil-works/pi-ai";
-import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import {
   DefaultResourceLoader,
   ModelRuntime,
@@ -11,7 +11,8 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { runTool, type ToolSpec } from "../tools.ts";
-import { DEMO_CONTEXT_WINDOW, demoScript, demoSettings } from "./demo.ts";
+import { newId } from "../util.ts";
+import { DEMO_CONTEXT_WINDOW, demoComplete, demoScript, demoSettings } from "./demo.ts";
 import { HANDOFF_REMINDER, expectsHandoff, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
 
 function resultText(result: unknown): string {
@@ -36,6 +37,35 @@ export class PiExecutor implements Executor {
   runtime(): Promise<ModelRuntime> {
     this.runtimePromise ??= ModelRuntime.create({ credentials: this.options.credentials, modelsPath: null, refreshOnCreate: false });
     return this.runtimePromise;
+  }
+
+  /** One completion outside any run (the context tidier). The demo answers from a script instead of a model. */
+  async complete(req: { demo: boolean; provider: string; model: string; system: string; prompt: string }): Promise<{ text: string; costUsd?: number }> {
+    const runtime = await this.runtime();
+    let cleanup = () => {};
+    let model;
+    if (req.demo) {
+      const providerId = `demo-${newId("once")}`;
+      const faux = fauxProvider({ provider: providerId, models: [{ id: req.model, name: req.model, contextWindow: DEMO_CONTEXT_WINDOW, maxTokens: 8_000 }], tokensPerSecond: 100_000 });
+      faux.setResponses([fauxAssistantMessage(demoComplete(req.prompt))]);
+      runtime.registerNativeProvider(faux.provider);
+      cleanup = () => runtime.unregisterProvider(providerId);
+      model = runtime.getModel(providerId, req.model);
+    } else {
+      model = runtime.getModel(req.provider, req.model);
+    }
+    try {
+      if (!model) throw new Error(`找不到模型 ${req.provider}/${req.model}`);
+      const reply = await runtime.completeSimple(model, {
+        systemPrompt: req.system,
+        messages: [{ role: "user", content: [{ type: "text", text: req.prompt }], timestamp: Date.now() }],
+      });
+      if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(reply.errorMessage ?? "模型没有返回结果");
+      const text = reply.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+      return { text, costUsd: req.demo ? 0 : reply.usage?.cost?.total };
+    } finally {
+      cleanup();
+    }
   }
 
   async run(req: ExecuteRequest): Promise<ExecuteResult> {

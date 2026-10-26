@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, Pin, PinOff, Plus, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, Pin, PinOff, Plus, Search, Sparkles, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -12,13 +12,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { api, patch, post, put } from "@/lib/api";
 import { kb, timeAgo } from "@/lib/format";
 import { navigate } from "@/lib/router";
-import type { Lesson, MemoryEntry } from "@/lib/types";
+import { useBaton } from "@/lib/store";
+import type { Lesson, MemoryEntry, TidyRecord, TidyStatus } from "@/lib/types";
 
 const CONTEXT_LIMIT = 8 * 1024;
+const USD_TO_CNY = 7.2;
 const MEMORY_KIND = { fact: "事实", decision: "决定", preference: "偏好" } as const;
 const LESSON_STATUS = { open: "待固化", hardened: "已固化", closed: "已关闭" } as const;
 
 const bytes = (s: string) => new TextEncoder().encode(s).length;
+/** Exact, so「over budget」never reads as two equal rounded numbers. */
+const byteCount = (n: number) => `${n.toLocaleString()} 字节`;
 
 function useLoad<T>(path: string) {
   const [data, setData] = useState<T>();
@@ -50,21 +54,39 @@ function LoadState({ error, loading }: { error?: string; loading: boolean }) {
 }
 
 function ContextTab() {
-  const { data, error } = useLoad<{ content: string }>("/api/context");
+  const { subscribe } = useBaton();
+  const { data, error, reload } = useLoad<{ content: string }>("/api/context");
+  const tidy = useLoad<TidyStatus>("/api/context/tidy");
   const [content, setContent] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const dirty = data !== undefined && content !== data.content;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+
   useEffect(() => {
     if (data) setContent(data.content);
   }, [data]);
+  // A tidy (or its undo) rewrites CONTEXT.md; pick that up unless the user is mid-edit.
+  useEffect(
+    () =>
+      subscribe((msg) => {
+        if (msg.type !== "tidy") return;
+        void tidy.reload();
+        if (!dirtyRef.current) void reload();
+      }),
+    [subscribe, reload, tidy.reload],
+  );
+
   const size = bytes(content ?? "");
-  const dirty = data && content !== data.content;
+  const budget = tidy.data?.budget;
+  const running = tidy.data?.records.find((r) => r.status === "running");
 
   const save = async () => {
     setSaving(true);
     try {
       await put("/api/context", { content });
-      data!.content = content ?? "";
-      toast.success("已保存 CONTEXT.md");
+      await reload();
+      toast.success(budget && size > budget && !tidy.data?.unavailable ? "已保存。超过了预算，整理员开始整理" : "已保存 CONTEXT.md");
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -72,23 +94,151 @@ function ContextTab() {
     }
   };
 
+  const startTidy = async () => {
+    try {
+      await post("/api/context/tidy", {});
+      await tidy.reload();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
   if (content === undefined) return <LoadState error={error} loading />;
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        房间上下文：项目是什么、当前目标、约定。每个 agent 开工时都会读到，agent 也可以用 <code className="rounded bg-muted px-1">update_context</code> 维护它。保持精简，细节放进记忆。
+        房间上下文：项目是什么、当前目标、约定。每个 agent 开工时都会读到，agent 也可以用 <code className="rounded bg-muted px-1">update_context</code> 维护它。保持精简，细节放进记忆；超过预算时，整理员会合并重复内容、把细节移进记忆，改动可以撤销。
       </p>
       <Textarea value={content} onChange={(e) => setContent(e.target.value)} rows={18} className="font-mono text-xs leading-relaxed" />
-      <div className="flex items-center justify-between gap-3">
-        <span className={cn("text-xs tabular-nums", size > CONTEXT_LIMIT ? "text-destructive" : "text-muted-foreground")}>
-          {kb(size)} / {kb(CONTEXT_LIMIT)}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className={cn("text-xs tabular-nums", size > CONTEXT_LIMIT ? "text-destructive" : budget && size > budget ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>
+          {byteCount(size)}
+          {budget !== undefined && ` · 预算 ${byteCount(budget)}`} · 上限 {byteCount(CONTEXT_LIMIT)}
         </span>
-        <Button onClick={save} disabled={!dirty || saving || size > CONTEXT_LIMIT}>
-          {saving && <Loader2 className="animate-spin" />}保存
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={startTidy} disabled={dirty || Boolean(running) || Boolean(tidy.data?.unavailable)} title={tidy.data?.unavailable}>
+            {running ? <Loader2 className="animate-spin" /> : <Sparkles />}现在整理
+          </Button>
+          <Button onClick={save} disabled={!dirty || saving || size > CONTEXT_LIMIT}>
+            {saving && <Loader2 className="animate-spin" />}保存
+          </Button>
+        </div>
       </div>
+      {tidy.data && <TidyPanel status={tidy.data} onChange={() => void Promise.all([tidy.reload(), reload()])} />}
     </div>
   );
+}
+
+const TIDY_STATUS: Record<TidyRecord["status"], { label: string; tone: string }> = {
+  running: { label: "整理中", tone: "bg-sky-500/15 text-sky-700 dark:text-sky-300" },
+  applied: { label: "已生效", tone: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" },
+  failed: { label: "没整理成", tone: "bg-red-500/15 text-red-700 dark:text-red-300" },
+  undone: { label: "已撤销", tone: "bg-muted text-muted-foreground" },
+};
+
+function TidyPanel({ status, onChange }: { status: TidyStatus; onChange: () => void }) {
+  const [open, setOpen] = useState<string>();
+  const undo = async (id: string) => {
+    try {
+      await post(`/api/context/tidy/${id}/undo`, {});
+      toast.success("已撤销这次整理，移进记忆的条目已标为过时");
+      onChange();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="space-y-2 pt-2">
+      {status.overBudget && status.unavailable && (
+        <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">房间上下文超过了预算，但现在没法自动整理：{status.unavailable}。</p>
+      )}
+      {status.records.length > 0 && <h3 className="text-sm font-medium">整理记录</h3>}
+      {status.records.map((r, i) => (
+        <div key={r.id} className="rounded-lg border p-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className={cn("rounded px-1.5 py-0.5 text-xs", TIDY_STATUS[r.status].tone)}>{TIDY_STATUS[r.status].label}</span>
+            <span className="text-xs text-muted-foreground">
+              {r.trigger === "auto" ? "超预算自动整理" : "手动整理"} · {r.model} · {timeAgo(r.createdAt)}
+              {r.costUsd ? ` · ¥${(r.costUsd * USD_TO_CNY).toFixed(3)}` : ""}
+            </span>
+            <div className="ml-auto flex gap-1">
+              {r.after !== undefined && (
+                <Button variant="ghost" size="sm" onClick={() => setOpen(open === r.id ? undefined : r.id)}>
+                  {open === r.id ? "收起" : "查看改动"}
+                </Button>
+              )}
+              {r.status === "applied" && i === status.records.findIndex((x) => x.status === "applied") && (
+                <Button variant="outline" size="sm" onClick={() => undo(r.id)}>
+                  <Undo2 />
+                  撤销
+                </Button>
+              )}
+            </div>
+          </div>
+          {r.status === "running" && <p className="mt-1.5 flex items-center gap-1.5 text-sm text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />正在合并重复内容、把细节移进记忆…</p>}
+          {r.summary && <p className="mt-1.5 text-sm">{r.summary}</p>}
+          {r.error && <p className="mt-1.5 text-sm text-destructive">{r.error}</p>}
+          {r.after !== undefined && <p className="mt-1 text-xs text-muted-foreground tabular-nums">{byteCount(bytes(r.before))} → {byteCount(bytes(r.after))}（预算 {byteCount(r.budget)}）</p>}
+          {open === r.id && r.after !== undefined && (
+            <div className="mt-3 space-y-3">
+              <pre className="max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5">
+                {lineDiff(r.before, r.after).map((line, k) => (
+                  <div
+                    key={k}
+                    className={cn(
+                      "break-all whitespace-pre-wrap",
+                      line.op === "+" && "bg-emerald-500/10 text-emerald-800 dark:text-emerald-300",
+                      line.op === "-" && "bg-red-500/10 text-red-800 dark:text-red-300",
+                    )}
+                  >
+                    {`${line.op === " " ? " " : line.op} ${line.text}`}
+                  </div>
+                ))}
+              </pre>
+              {r.memories.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">移进记忆 {r.memories.filter((m) => m.id).length} 条</p>
+                  <ul className="mt-1 space-y-1 text-sm">
+                    {r.memories.map((m, k) => (
+                      <li key={k} className={cn("flex gap-2", m.skipped && "text-muted-foreground")}>
+                        <Badge variant="secondary" className="shrink-0">{MEMORY_KIND[m.kind]}</Badge>
+                        <span>
+                          {m.text}
+                          {m.skipped && <span className="text-xs">（没写入：{m.skipped}）</span>}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Line diff by longest common subsequence; CONTEXT.md is at most 8KB, so the table stays small. */
+function lineDiff(before: string, after: string): { op: " " | "+" | "-"; text: string }[] {
+  const a = before.trimEnd().split("\n");
+  const b = after.trimEnd().split("\n");
+  const lcs = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  const out: { op: " " | "+" | "-"; text: string }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      out.push({ op: " ", text: a[i++] });
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) out.push({ op: "-", text: a[i++] });
+    else out.push({ op: "+", text: b[j++] });
+  }
+  while (i < a.length) out.push({ op: "-", text: a[i++] });
+  while (j < b.length) out.push({ op: "+", text: b[j++] });
+  return out;
 }
 
 function MemoryTab() {

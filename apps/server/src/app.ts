@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
+  CONTEXT_MAX_BYTES,
   canWrite,
   listLessons,
   listMemory,
@@ -117,9 +118,11 @@ export function createApp(state: AppState): Hono {
     };
     if (!Array.isArray(merged.checks) || merged.checks.some((ch) => !ch.name?.trim() || typeof ch.command !== "string")) bad("检查命令需要名字和命令");
     if (merged.budgets.executor < 2048 || merged.budgets.planner < 2048) bad("注入预算不能小于 2KB");
+    if (!(merged.budgets.context >= 1024 && merged.budgets.context <= CONTEXT_MAX_BYTES)) bad("房间上下文预算要在 1KB 到 8KB 之间");
     const commandChanged = merged.cursor.command !== current.cursor.command;
     state.ws.saveSettings(merged);
     if (commandChanged) await state.refreshAuth(true);
+    if (merged.budgets.context < current.budgets.context) state.tidier.maybeAuto();
     state.broadcast({ type: "state" });
     return c.json(merged);
   });
@@ -136,9 +139,24 @@ export function createApp(state: AppState): Hono {
   app.put("/api/context", async (c) => {
     const { content } = await body<{ content: string }>(c);
     if (typeof content !== "string") bad("缺少 content");
-    if (Buffer.byteLength(content) > 8 * 1024) bad("房间上下文超过 8KB，请把细节移进记忆");
+    if (Buffer.byteLength(content) > CONTEXT_MAX_BYTES) bad("房间上下文超过 8KB，请把细节移进记忆");
     state.ws.writeContext(content);
     return c.json({ ok: true });
+  });
+  app.get("/api/context/tidy", (c) => c.json(state.tidier.status()));
+  app.post("/api/context/tidy", (c) => {
+    try {
+      return c.json(state.tidier.start("manual"), 202);
+    } catch (error) {
+      bad((error as Error).message);
+    }
+  });
+  app.post("/api/context/tidy/:id/undo", (c) => {
+    try {
+      return c.json(state.tidier.undo(c.req.param("id")));
+    } catch (error) {
+      bad((error as Error).message);
+    }
   });
 
   app.get("/api/rules", (c) => c.json(state.ws.listRules()));

@@ -115,7 +115,7 @@ export function defaultSettings(name: string): WorkspaceSettings {
       denyPaths: [".env", ".env.*", ".git/**", ".baton/shadow.git/**"],
     },
     memory: { enabled: true },
-    budgets: { planner: 24 * 1024, executor: 12 * 1024 },
+    budgets: { planner: 24 * 1024, executor: 12 * 1024, context: 6 * 1024 },
     approvalTimeoutSec: 300,
     cursor: { command: "agent" },
   };

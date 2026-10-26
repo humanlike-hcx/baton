@@ -65,7 +65,8 @@ export interface WorkspaceSettings {
     denyPaths: string[];
   };
   memory: { enabled: boolean };
-  budgets: { planner: number; executor: number };
+  /** `context` is CONTEXT.md's tidy budget; the others cap the whole briefing per role. */
+  budgets: { planner: number; executor: number; context: number };
   approvalTimeoutSec: number;
   cursor: { command: string };
 }
@@ -286,4 +287,37 @@ export interface AuthStatus {
   chatgpt: { loggedIn: boolean; pending?: { url: string } };
   deepseek: { configured: boolean };
   cursor: { installed: boolean; loggedIn: boolean; account?: string; pending?: { url: string }; error?: string };
+}
+
+export interface TidyMemory {
+  kind: MemoryKind;
+  text: string;
+  /** Set once written; absent when the memory store refused it (`skipped` says why). */
+  id?: string;
+  skipped?: string;
+}
+
+export interface TidyRecord {
+  id: string;
+  trigger: "auto" | "manual";
+  status: "running" | "applied" | "failed" | "undone";
+  model: string;
+  budget: number;
+  createdAt: string;
+  endedAt?: string;
+  before: string;
+  after?: string;
+  summary?: string;
+  memories: TidyMemory[];
+  error?: string;
+  costUsd?: number;
+}
+
+export interface TidyStatus {
+  bytes: number;
+  budget: number;
+  overBudget: boolean;
+  /** Why tidying is unavailable right now (no DeepSeek key, memory off); absent when it can run. */
+  unavailable?: string;
+  records: TidyRecord[];
 }

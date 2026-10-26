@@ -7,6 +7,7 @@ import { listMemory, recordLesson, remember, searchMemory } from "./memory.ts";
 import { applyChunks, parsePatch } from "./patch.ts";
 import { PermissionError, canWrite, matchesDeny, resolveWorkspacePath, shellPolicy } from "./permissions.ts";
 import { formatShellResult, runShell } from "./shell.ts";
+import { CONTEXT_MAX_BYTES } from "./tidy.ts";
 import type { AgentCard, Handoff, Risk, Role, Stage } from "./types.ts";
 import { byteLength, globToRegExp, truncateMiddle } from "./util.ts";
 import type { Workspace } from "./workspace.ts";
@@ -353,7 +354,6 @@ export const readContextTool: ToolSpec = {
   },
 };
 
-const CONTEXT_MAX_BYTES = 8 * 1024;
 
 export const updateContextTool: ToolSpec = {
   name: "update_context",
