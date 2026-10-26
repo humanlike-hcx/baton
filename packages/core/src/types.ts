@@ -241,6 +241,27 @@ export interface Thread {
   extraHops: number;
   /** User notes queued for the next run. */
   notes: string[];
+  /** Chat only: a relay task being drafted from the conversation, waiting for the user's confirmation. */
+  promotion?: Promotion;
+  /** Chat only: relay threads started from this conversation. */
+  relays?: string[];
+  /** Relay only: the chat thread this relay was started from. */
+  fromChat?: string;
+}
+
+export interface RelayDraft {
+  title: string;
+  task: string;
+  acceptance: string[];
+}
+
+export interface Promotion {
+  status: "drafting" | "ready" | "failed";
+  agentId: string;
+  runId?: string;
+  /** What the agent drafted, or a starting point taken from the conversation when it could not. */
+  draft: RelayDraft;
+  error?: string;
 }
 
 export interface BriefingSection {

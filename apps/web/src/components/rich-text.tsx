@@ -16,12 +16,38 @@ function inline(text: string): ReactNode[] {
   });
 }
 
-/** Small Markdown subset: headings, bullets, bold, inline code, line breaks. */
+type Block = { kind: "line"; text: string } | { kind: "code"; text: string };
+
+/** Splits out fenced code blocks; an unclosed fence (still streaming) runs to the end. */
+function blocks(text: string): Block[] {
+  const out: Block[] = [];
+  let code: string[] | undefined;
+  for (const line of text.split("\n")) {
+    if (/^\s*```/.test(line)) {
+      if (code) {
+        out.push({ kind: "code", text: code.join("\n") });
+        code = undefined;
+      } else code = [];
+    } else if (code) code.push(line);
+    else out.push({ kind: "line", text: line });
+  }
+  if (code) out.push({ kind: "code", text: code.join("\n") });
+  return out;
+}
+
+/** Small Markdown subset: headings, bullets, bold, inline code, fenced code, line breaks. */
 export function RichText({ text, className }: { text: string; className?: string }) {
-  const lines = text.split("\n");
   return (
     <div className={cn("space-y-1 text-sm leading-relaxed break-words", className)}>
-      {lines.map((line, i) => {
+      {blocks(text).map((block, i) => {
+        if (block.kind === "code") {
+          return (
+            <pre key={i} className="overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre">
+              {block.text}
+            </pre>
+          );
+        }
+        const line = block.text;
         const heading = /^(#{1,4})\s+(.*)$/.exec(line);
         if (heading) return <div key={i} className="pt-1 font-semibold">{inline(heading[2]!)}</div>;
         const bullet = /^(\s*)[-*]\s+(.*)$/.exec(line);

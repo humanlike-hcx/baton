@@ -7,6 +7,7 @@ import { defaultSettings } from "../src/defaults.ts";
 import { modelFamily } from "../src/families.ts";
 import { compactionProgress, listLessons, listMemory, mergeProgress, recordLesson, remember } from "../src/memory.ts";
 import { applyChunks, parsePatch } from "../src/patch.ts";
+import { parseRelayDraft } from "../src/promote.ts";
 import { PermissionError, resolveWorkspacePath, shellPolicy } from "../src/permissions.ts";
 import { isStall, nextTransition, selectAgent } from "../src/router.ts";
 import { runShell } from "../src/shell.ts";
@@ -145,6 +146,21 @@ describe("tools per role", () => {
     for (const role of ["plan", "implement", "review", "advisor", "chat"] as const) {
       expect(toolsFor(online, role).every((t) => t.risk !== "network"), role).toBe(true);
     }
+  });
+});
+
+describe("relay drafts from a chat", () => {
+  it("reads a fenced or bare JSON draft and rejects drafts without acceptance criteria", () => {
+    const fenced = '好的：\n```json\n{"title": "写说明", "task": "写一份说明", "acceptance": ["有说明", " ", 3]}\n```';
+    expect(parseRelayDraft(fenced)).toEqual({ title: "写说明", task: "写一份说明", acceptance: ["有说明"] });
+    expect(parseRelayDraft('整理如下 {"task": "把 README 翻成英文", "acceptance": ["README.en.md 存在"]} 就这样')).toEqual({
+      title: "把 README 翻成英文",
+      task: "把 README 翻成英文",
+      acceptance: ["README.en.md 存在"],
+    });
+    expect(parseRelayDraft('{"title": "x", "task": "y", "acceptance": []}')).toBeUndefined();
+    expect(parseRelayDraft("{not json}")).toBeUndefined();
+    expect(parseRelayDraft("我觉得可以先写一份说明。")).toBeUndefined();
   });
 });
 

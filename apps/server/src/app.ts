@@ -259,6 +259,40 @@ export function createApp(state: AppState): Hono {
     }
     return c.json({ ok: true });
   });
+  const threadOr404 = (id: string) => {
+    const thread = state.orchestrator.getThread(id);
+    if (!thread) throw new HTTPException(404, { message: "找不到线程" });
+    return thread;
+  };
+  app.post("/api/threads/:id/promote", async (c) => {
+    const thread = threadOr404(c.req.param("id"));
+    const { agentId } = await body<{ agentId?: string }>(c);
+    try {
+      state.orchestrator.promoteChat(thread.id, agentId);
+    } catch (error) {
+      bad((error as Error).message);
+    }
+    return c.json({ ok: true }, 202);
+  });
+  app.post("/api/threads/:id/promote/confirm", async (c) => {
+    const thread = threadOr404(c.req.param("id"));
+    const draft = await body<{ title?: string; task?: string; acceptance?: string[]; stage?: Stage }>(c);
+    if (draft.stage && !["plan", "implement", "review"].includes(draft.stage)) bad("起始阶段不合法");
+    try {
+      return c.json(state.orchestrator.confirmPromotion(thread.id, { title: draft.title ?? "", task: draft.task ?? "", acceptance: Array.isArray(draft.acceptance) ? draft.acceptance : [], stage: draft.stage }), 201);
+    } catch (error) {
+      bad((error as Error).message);
+    }
+  });
+  app.delete("/api/threads/:id/promote", (c) => {
+    const thread = threadOr404(c.req.param("id"));
+    try {
+      state.orchestrator.discardPromotion(thread.id);
+    } catch (error) {
+      bad((error as Error).message);
+    }
+    return c.json({ ok: true });
+  });
   app.post("/api/threads/:id/decisions/:decisionId", async (c) => {
     const input = await body<{ approve: boolean; agentId?: string }>(c);
     await state.orchestrator.decide(c.req.param("id"), c.req.param("decisionId"), input).catch((e: Error) => bad(e.message));

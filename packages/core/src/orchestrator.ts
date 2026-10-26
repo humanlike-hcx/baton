@@ -21,6 +21,7 @@ import {
   selectAgent,
   type Transition,
 } from "./router.ts";
+import { RELAY_DRAFT_PROMPT, fallbackDraft, parseRelayDraft } from "./promote.ts";
 import { ShadowGit } from "./snapshot.ts";
 import { MCP_TOOLS, runTool, toolsFor, type ToolContext, type ToolOutput } from "./tools.ts";
 import type {
@@ -29,6 +30,7 @@ import type {
   Briefing,
   Handoff,
   PendingDecision,
+  RelayDraft,
   Risk,
   Role,
   RunRecord,
@@ -113,6 +115,11 @@ export class Orchestrator {
         for (const run of t.runs) if (run.status === "running") run.status = "cancelled";
         changed = true;
       }
+      if (t.promotion?.status === "drafting") {
+        t.notes = t.notes.filter((n) => n !== RELAY_DRAFT_PROMPT);
+        t.promotion = { ...t.promotion, status: "failed", error: "工作台重启，整理被中断了" };
+        changed = true;
+      }
       if (t.kind === "chat" && t.approvedLevel >= 2) {
         t.approvedLevel = 0;
         this.push(t, { kind: "notice", level: "info", text: "工作台重启，已收回这个对话的写权限。需要时重新开放。" }, false);
@@ -168,6 +175,10 @@ export class Orchestrator {
 
   createThread(input: NewThreadInput): Thread {
     if (input.kind === "chat") return this.createChat(input);
+    return this.createRelay(input);
+  }
+
+  private createRelay(input: NewThreadInput, fromChat?: Thread): Thread {
     const title = input.title.trim();
     const acceptance = input.acceptance.map((a) => a.trim()).filter(Boolean);
     if (!title) throw new Error("请填写标题");
@@ -183,6 +194,10 @@ export class Orchestrator {
     });
     if (input.agentId) thread.pinnedAgents[thread.stage] = input.agentId;
     this.threads.set(thread.id, thread);
+    if (fromChat) {
+      thread.fromChat = fromChat.id;
+      this.push(thread, { kind: "notice", level: "info", text: `由对话「${fromChat.title}」转来，任务和验收标准已经你确认。` }, false);
+    }
     this.push(thread, { kind: "user", text: `${thread.task}\n\n验收标准：\n${acceptance.map((a, i) => `${i + 1}. ${a}`).join("\n")}` }, false);
     this.save(thread);
     this.options.onEvent({ type: "threads" });
@@ -249,14 +264,17 @@ export class Orchestrator {
     void this.begin(thread, stage, { userInitiated: true });
   }
 
+  private switchChatAgent(thread: Thread, agentId: string | undefined): void {
+    if (!agentId || agentId === thread.pinnedAgents.chat) return;
+    const agent = this.ws.getAgent(agentId);
+    if (!agent) throw new Error(`找不到 agent ${agentId}`);
+    const previous = thread.pinnedAgents.chat ? this.ws.getAgent(thread.pinnedAgents.chat)?.name : undefined;
+    thread.pinnedAgents.chat = agent.id;
+    this.push(thread, { kind: "notice", level: "info", text: `换成 ${agent.name} 接着聊${previous ? `（之前是 ${previous}）` : ""}。它会看到前面对话的摘要和最近几轮原文。` }, false);
+  }
+
   private postChat(thread: Thread, body: string, agentId?: string): void {
-    if (agentId && agentId !== thread.pinnedAgents.chat) {
-      const agent = this.ws.getAgent(agentId);
-      if (!agent) throw new Error(`找不到 agent ${agentId}`);
-      const previous = thread.pinnedAgents.chat ? this.ws.getAgent(thread.pinnedAgents.chat)?.name : undefined;
-      thread.pinnedAgents.chat = agent.id;
-      this.push(thread, { kind: "notice", level: "info", text: `换成 ${agent.name} 接着聊${previous ? `（之前是 ${previous}）` : ""}。它会看到前面对话的摘要和最近几轮原文。` }, false);
-    }
+    this.switchChatAgent(thread, agentId);
     this.push(thread, { kind: "user", text: body });
     thread.notes.push(body);
     if (this.active.has(thread.id) || thread.status === "waiting") {
@@ -276,10 +294,69 @@ export class Orchestrator {
       const reason = selection.rejected.find((r) => r.id === agentId)?.reason ?? "找不到这个 agent";
       thread.status = "paused";
       this.notice(thread, "error", `${known?.name ?? agentId ?? "agent"} 现在不能回复：${reason}。换一个 agent 再发一次即可。`);
+      if (thread.promotion?.status === "drafting") {
+        thread.notes = thread.notes.filter((n) => n !== RELAY_DRAFT_PROMPT);
+        thread.promotion = { ...thread.promotion, status: "failed", error: `${known?.name ?? "agent"} 现在不能整理：${reason}` };
+        this.save(thread);
+      }
       return;
     }
     thread.status = "running";
     await this.startRun(thread, agent, "chat", { sendBack: false });
+  }
+
+  /**
+   * Chat → relay, step 1: the chat agent drafts a relay task and acceptance criteria from the
+   * conversation. Nothing starts until the user confirms the draft.
+   */
+  promoteChat(threadId: string, agentId?: string): void {
+    const thread = this.mustThread(threadId);
+    if (thread.kind !== "chat") throw new Error("只有对话线程可以转成接力线程");
+    if (this.active.has(threadId) || thread.status === "waiting") throw new Error("正在回复，等这一轮结束再转");
+    if (thread.notes.length) throw new Error("还有没回复的消息，等回复后再转");
+    if (!chatTurns(thread).some((r) => r.status === "succeeded")) throw new Error("先聊几句，再把讨论清楚的事转成接力线程");
+    this.switchChatAgent(thread, agentId);
+    const agent = thread.pinnedAgents.chat ? this.ws.getAgent(thread.pinnedAgents.chat) : undefined;
+    if (!agent) throw new Error("请选择一个 agent");
+    thread.promotion = { status: "drafting", agentId: agent.id, draft: fallbackDraft(thread) };
+    this.notice(thread, "info", `请 ${agent.name} 根据前面的对话整理接力任务和验收标准。整理好后由你确认，确认前不会开始接力。`);
+    thread.notes.push(RELAY_DRAFT_PROMPT);
+    void this.beginChat(thread);
+  }
+
+  /** Chat → relay, step 2: starts the relay with the confirmed (and possibly edited) draft. */
+  confirmPromotion(threadId: string, draft: RelayDraft & { stage?: Stage }): Thread {
+    const chat = this.mustThread(threadId);
+    if (chat.kind !== "chat" || !chat.promotion) throw new Error("这个对话没有待确认的接力任务");
+    if (chat.promotion.status === "drafting") throw new Error("还在整理，等整理完再确认");
+    const relay = this.createRelay({ kind: "relay", title: draft.title, task: draft.task, acceptance: draft.acceptance ?? [], stage: draft.stage }, chat);
+    chat.relays = [...(chat.relays ?? []), relay.id];
+    chat.promotion = undefined;
+    this.notice(chat, "info", `已转成接力线程「${relay.title}」，接力已开始。`);
+    this.save(chat);
+    return relay;
+  }
+
+  discardPromotion(threadId: string): void {
+    const thread = this.mustThread(threadId);
+    if (!thread.promotion) return;
+    if (thread.promotion.status === "drafting") throw new Error("还在整理，先取消这次回复");
+    thread.promotion = undefined;
+    this.save(thread);
+  }
+
+  private finishDraft(thread: Thread, run: RunRecord): void {
+    const promotion = thread.promotion!;
+    const draft = run.status === "succeeded" ? parseRelayDraft(run.finalText) : undefined;
+    if (draft) {
+      thread.promotion = { ...promotion, status: "ready", runId: run.id, draft };
+      this.notice(thread, "info", "接力任务草稿整理好了，请核对、修改后确认，确认后才开始接力。");
+      return;
+    }
+    const error =
+      run.status === "cancelled" ? "整理被取消了" : run.status === "failed" ? `整理失败：${run.error ?? "未知错误"}` : "agent 没有按格式给出任务和验收标准";
+    thread.promotion = { ...promotion, status: "failed", runId: run.id, error };
+    this.notice(thread, "warn", `${error}。可以自己填写后确认，或重新整理。`);
   }
 
   cancel(threadId: string): void {
@@ -628,6 +705,7 @@ export class Orchestrator {
       thread.notes = thread.notes.slice(consumedNotes);
       thread.summary = role === "chat" ? rollChatSummary(thread) : rollSummary(thread);
     }
+    if (role === "chat" && thread.promotion?.status === "drafting" && task === RELAY_DRAFT_PROMPT) this.finishDraft(thread, run);
     if (role === "chat") thread.status = "idle";
     this.save(thread);
     if (role === "chat") {

@@ -126,6 +126,7 @@ agent 只提议目标阶段，harness 决定交给谁。
 - 换 agent 时写一条时间线提示。新 agent 的开场上下文里带「更早的对话（摘要）」和「最近几轮原文」：最近 3 轮原文，更早的每轮压成一行，存在 `thread.summary`，最多 30 行。
 - 默认只读。用户开放写权限后（`approvedLevel ≥ 2`），有效权限取 agent 卡片和线程开关的较小者：开关打开且 agent 卡片本身可写时，写文件、命令按 agent 卡片；否则不能写、不能执行命令。可写的对话运行和实现一样占写锁、先快照。服务重启时收回所有对话的写权限。
 - 工具：读文件、搜索、读上下文、查和写记忆、记教训，以及权限允许时的改文件和命令；没有 `write_handoff` 和 `handoff_to`。交接由 harness 根据回复自动生成，不进时间线。
+- 转成接力线程：`POST /api/threads/:id/promote` 让当前 agent 用一轮普通对话（提示词 `RELAY_DRAFT_PROMPT`）把对话整理成 `{title, task, acceptance}` 的 JSON，结果存在 `thread.promotion`。这一轮走 `chat` 角色，所以 Pi 和 Cursor 两条路线都适用，不需要额外工具。解析不出来、运行失败、被取消或服务重启时，`promotion.status = "failed"`，草稿退回为「用户说过的话」，由用户自己填写。用户核对、修改后调 `.../promote/confirm` 才创建接力线程并开始；接力线程记 `fromChat`，对话记 `relays`，两边互相链接。
 
 ## 7. 检查
 

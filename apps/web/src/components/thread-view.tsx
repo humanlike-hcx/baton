@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, Check, CircleStop, FileDiff, Hash, Loader2, MessageCircle, PanelRight, Trash2 } from "lucide-react";
+import { ArrowUp, Check, CircleStop, FileDiff, Hash, Loader2, MessageCircle, PanelRight, Trash2, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,9 +13,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { del, post } from "@/lib/api";
 import { ROLE_LABEL, SOURCE_LABEL, STAGES, STAGE_LABEL, STATUS_TONE, kb, statusLabel, tokens } from "@/lib/format";
-import { navigate } from "@/lib/router";
+import { href, navigate } from "@/lib/router";
 import { useThread, useBaton } from "@/lib/store";
-import type { AgentView, Thread } from "@/lib/types";
+import type { AgentView, Stage, Thread } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { DiffDialog } from "./diff-dialog";
 import { TimelineView } from "./timeline";
@@ -182,6 +184,117 @@ function ChatControls({ thread, agents, agentId, onAgent }: { thread: Thread; ag
   );
 }
 
+/** The relay task drafted from a chat: editable, and nothing starts until it is confirmed. */
+function PromotionPanel({ thread, agents }: { thread: Thread; agents: AgentView[] }) {
+  const promotion = thread.promotion!;
+  const [title, setTitle] = useState(promotion.draft.title);
+  const [task, setTask] = useState(promotion.draft.task);
+  const [acceptance, setAcceptance] = useState(promotion.draft.acceptance.join("\n"));
+  const [stage, setStage] = useState<Stage>("plan");
+  const [busy, setBusy] = useState(false);
+
+  // Reset only when a new draft arrives; every thread refetch brings a fresh draft object and must not wipe edits.
+  useEffect(() => {
+    setTitle(promotion.draft.title);
+    setTask(promotion.draft.task);
+    setAcceptance(promotion.draft.acceptance.join("\n"));
+  }, [promotion.status, promotion.runId]);
+
+  if (promotion.status === "drafting") {
+    return (
+      <div className="mx-auto mb-2 flex max-w-4xl items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" /> 正在根据对话整理接力任务和验收标准…
+      </div>
+    );
+  }
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const confirm = () =>
+    run(async () => {
+      const lines = acceptance.split("\n").map((l) => l.trim()).filter(Boolean);
+      const relay = await post<Thread>(`/api/threads/${thread.id}/promote/confirm`, { title, task, acceptance: lines, stage });
+      toast.success("接力已开始");
+      navigate({ page: "threads", threadId: relay.id });
+    });
+  const author = agents.find((a) => a.id === promotion.agentId)?.name ?? promotion.agentId;
+
+  return (
+    <div className="mx-auto mb-3 max-h-[50dvh] max-w-4xl space-y-3 overflow-y-auto rounded-lg border bg-card p-4 pb-0">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="flex items-center gap-1.5 text-sm font-medium">
+          <Workflow className="size-4" /> 转成接力线程
+        </span>
+        <span className={cn("text-xs", promotion.status === "failed" ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground")}>
+          {promotion.status === "ready" ? `${author} 根据对话整理了下面的任务，核对、修改后确认才会开始接力。` : `${promotion.error ?? "没有整理出来"}。可以自己填写后确认。`}
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="promote-title">标题</Label>
+        <Input id="promote-title" value={title} onChange={(e) => setTitle(e.target.value)} />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="promote-task">任务</Label>
+        <Textarea id="promote-task" rows={5} value={task} onChange={(e) => setTask(e.target.value)} />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="promote-acceptance">验收标准（每行一条）</Label>
+        <Textarea id="promote-acceptance" rows={3} value={acceptance} onChange={(e) => setAcceptance(e.target.value)} placeholder="至少一条，每条都要能检查" />
+      </div>
+      <div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t bg-card py-3">
+        <Select value={stage} onValueChange={(v) => setStage(v as Stage)}>
+          <SelectTrigger size="sm" className="w-36" aria-label="起始阶段">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(["plan", "implement", "review"] as const).map((s) => (
+              <SelectItem key={s} value={s}>
+                从{STAGE_LABEL[s]}开始
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="ml-auto flex gap-2">
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => run(() => del(`/api/threads/${thread.id}/promote`))}>
+            放弃
+          </Button>
+          <Button size="sm" variant="outline" disabled={busy || thread.status === "running"} onClick={() => run(() => post(`/api/threads/${thread.id}/promote`))}>
+            重新整理
+          </Button>
+          <Button size="sm" disabled={busy || !title.trim() || !acceptance.trim()} onClick={() => void confirm()}>
+            {busy && <Loader2 className="animate-spin" />}
+            确认并开始接力
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThreadLinks({ thread }: { thread: Thread }) {
+  const { state } = useBaton();
+  const titleOf = (id: string, gone: string) => (state ? (state.threads.find((t) => t.id === id)?.title ?? gone) : "…");
+  const links = thread.fromChat
+    ? [{ id: thread.fromChat, label: `来自对话：${titleOf(thread.fromChat, "已删除的对话")}` }]
+    : (thread.relays ?? []).map((id) => ({ id, label: `接力：${titleOf(id, "已删除的线程")}` }));
+  return links.map((l) => (
+    <a key={l.id} href={href({ page: "threads", threadId: l.id })} className="max-w-60">
+      <Badge variant="outline" className="max-w-full hover:bg-muted">
+        {thread.fromChat ? <MessageCircle /> : <Workflow />}
+        <span className="truncate">{l.label}</span>
+      </Badge>
+    </a>
+  ));
+}
+
 export function ThreadView({ threadId }: { threadId: string }) {
   const { thread, error, loading } = useThread(threadId);
   const { state } = useBaton();
@@ -216,6 +329,15 @@ export function ThreadView({ threadId }: { threadId: string }) {
       toast.error((e as Error).message);
     } finally {
       setSending(false);
+    }
+  };
+
+  const promote = async () => {
+    try {
+      await post(`/api/threads/${threadId}/promote`, { agentId: replyAgent });
+      stick.current = true;
+    } catch (e) {
+      toast.error((e as Error).message);
     }
   };
 
@@ -293,12 +415,24 @@ export function ThreadView({ threadId }: { threadId: string }) {
                   {statusLabel(thread)}
                 </Badge>
                 {thread.kind === "chat" && thread.approvedLevel >= 2 && <Badge className="border-0 bg-amber-500/15 text-amber-700 dark:text-amber-300">可写</Badge>}
+                <ThreadLinks thread={thread} />
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
               {thread.status === "running" && (
                 <Button size="sm" variant="outline" onClick={cancel}>
                   <CircleStop /> 取消
+                </Button>
+              )}
+              {thread.kind === "chat" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={thread.status === "running" || Boolean(thread.promotion) || !thread.runs.some((r) => r.status === "succeeded")}
+                  onClick={promote}
+                  title="让当前 agent 根据对话整理任务和验收标准，你确认后再开始接力"
+                >
+                  <Workflow /> <span className="hidden sm:inline">转成接力线程</span>
                 </Button>
               )}
               <Button size="icon-sm" variant="ghost" className="xl:hidden" onClick={() => setPanelOpen(true)} aria-label="运行详情">
@@ -332,6 +466,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
         </div>
 
         <div className="border-t px-4 py-3 sm:px-6">
+          {thread.kind === "chat" && thread.promotion && <PromotionPanel thread={thread} agents={state?.agents ?? []} />}
           {thread.kind === "chat" && <ChatControls thread={thread} agents={state?.agents ?? []} agentId={replyAgent} onAgent={setChatAgent} />}
           <div className="mx-auto flex max-w-4xl items-end gap-2">
             <Textarea

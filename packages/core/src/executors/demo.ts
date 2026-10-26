@@ -1,4 +1,5 @@
 import { fauxAssistantMessage, fauxText, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
+import { RELAY_DRAFT_PROMPT } from "../promote.ts";
 import type { Role, Thread } from "../types.ts";
 import { slugify } from "../util.ts";
 
@@ -188,6 +189,24 @@ function relayScript(role: Role, thread: Thread | undefined, prompt: string, tit
   ];
 }
 
+/** Drafts a relay task from the user's turns in the briefing;「不按格式」in the conversation makes it answer in prose instead. */
+function demoRelayDraft(briefing: string): string {
+  const recent = (briefing.split("## 最近几轮原文")[1] ?? "")
+    .split("### 用户\n")
+    .slice(1)
+    .map((turn) => turn.split("\n\n### ")[0]!.trim());
+  const older = [...briefing.matchAll(/^- 用户：(.+?) → /gm)].map((m) => m[1]!.trim());
+  const said = [...older, ...recent].filter((t) => t && !t.startsWith("请把我们前面讨论清楚的事"));
+  if (said.some((t) => t.includes("不按格式"))) return "（演示对话）我觉得可以先写一份说明，再看看要不要拆成几步。";
+  const topic = said[0]?.replace(/\s+/g, " ").slice(0, 20) || "整理对话结论";
+  const draft = {
+    title: topic,
+    task: ["把对话里定下的事写成一份说明，放在 notes/ 下。", "", "对话要点：", ...said.map((t) => `- ${t}`)].join("\n"),
+    acceptance: ["notes/ 下有一份说明，写清对话里定下的做法", "说明逐条回应了对话要点"],
+  };
+  return `\`\`\`json\n${JSON.stringify(draft, null, 2)}\n\`\`\``;
+}
+
 /**
  * Demo chat: quotes the previous user turn from its own briefing (so switching agents visibly
  * carries the conversation over), and reacts to「记住：」「查记忆：」「写文件：」.
@@ -196,6 +215,7 @@ function demoChat(prompt: string, briefing: string): FauxResponseStep[] {
   const toolUse = { stopReason: "toolUse" as const };
   const recent = briefing.split("## 最近几轮原文")[1] ?? "";
   const previous = recent.split("### 用户\n").slice(-1)[0]?.split("\n\n### ")[0]?.trim();
+  if (prompt.trim() === RELAY_DRAFT_PROMPT) return [fauxAssistantMessage(demoRelayDraft(briefing))];
   const said = `你说「${prompt.trim().slice(0, 60)}」`;
   const reply = previous && recent ? `（演示对话）接着前面的话题：上一轮用户说「${previous.slice(0, 60)}」。这一轮${said}。` : `（演示对话）收到，${said}。`;
 
