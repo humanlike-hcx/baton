@@ -1,13 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Bot, BookText, Boxes, ChartColumn, ChevronRight, Folder, FolderOpen, FolderPlus, Menu, Plus, Settings, Wifi, WifiOff } from "lucide-react";
+import { Bot, BookText, Boxes, ChartColumn, ChevronRight, Folder, FolderOpen, FolderPlus, Loader2, Menu, Plus, Settings, Wifi, WifiOff } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { post } from "@/lib/api";
 import { STATUS_LABEL, timeAgo } from "@/lib/format";
-import { useSwitchProject } from "@/lib/projects";
+import { chooseProjectDirectory, useSwitchProject } from "@/lib/projects";
 import { href, navigate, type Route } from "@/lib/router";
 import { useBaton } from "@/lib/store";
 import type { Project, ThreadSummary } from "@/lib/types";
@@ -129,7 +130,23 @@ function ProjectGroup({
 }
 
 function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void }) {
-  const { state, connected } = useBaton();
+  const { state, connected, refresh } = useBaton();
+  const [picking, setPicking] = useState(false);
+  const openByPicker = async () => {
+    setPicking(true);
+    try {
+      const picked = await chooseProjectDirectory();
+      if (!picked) return;
+      await post("/api/workspace/open", { path: picked });
+      await refresh();
+      navigate({ page: "threads" });
+      onNavigate?.();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setPicking(false);
+    }
+  };
   const activeThread = route.page === "threads" ? route.threadId : undefined;
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const toggle = (root: string) => {
@@ -185,10 +202,8 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
 
       <div className="mt-4 flex items-center justify-between pr-3 pl-5">
         <span className="text-xs font-medium text-muted-foreground">项目</span>
-        <Button asChild variant="ghost" size="icon" className="size-6" title="打开或新建项目">
-          <a href={href({ page: "settings", tab: "workspace" })} onClick={onNavigate} aria-label="打开或新建项目">
-            <FolderPlus className="size-3.5" />
-          </a>
+        <Button variant="ghost" size="icon" className="size-6" title="选择文件夹并打开项目" aria-label="选择文件夹并打开项目" disabled={picking} onClick={() => void openByPicker()}>
+          {picking ? <Loader2 className="size-3.5 animate-spin" /> : <FolderPlus className="size-3.5" />}
         </Button>
       </div>
       <ScrollArea className="mt-1 min-h-0 flex-1 px-3">

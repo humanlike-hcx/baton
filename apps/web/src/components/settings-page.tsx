@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { post, put } from "@/lib/api";
+import { chooseProjectDirectory } from "@/lib/projects";
 import { kb } from "@/lib/format";
 import { navigate } from "@/lib/router";
 import { useBaton } from "@/lib/store";
@@ -84,7 +85,24 @@ function WorkspaceTab() {
           })}
         </div>
       </Section>
-      <Section title="打开或新建项目" description="填本机上的绝对路径，比如你的项目仓库。第一次打开会初始化 .baton/、CONTEXT.md、AGENTS.md 里的工作台段落和 .cursor/mcp.json。">
+      <Section title="打开或新建项目" description="点「选择文件夹…」浏览本机目录。选择框里可以新建文件夹；取消则什么都不做。也可以手填绝对路径。第一次打开会初始化 .baton/、CONTEXT.md、AGENTS.md 里的工作台段落和 .cursor/mcp.json。">
+        <Button
+          variant="outline"
+          className="mb-3"
+          disabled={!!busy}
+          onClick={() =>
+            run("pick", async () => {
+              const picked = await chooseProjectDirectory();
+              if (!picked) return;
+              await post("/api/workspace/open", { path: picked });
+              await refresh();
+              navigate({ page: "threads" });
+            })
+          }
+        >
+          {busy === "pick" ? <Loader2 className="animate-spin" /> : <FolderOpen />}
+          选择文件夹…
+        </Button>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="~/code/my-project" className="font-mono text-xs" />
           <div className="flex gap-2">

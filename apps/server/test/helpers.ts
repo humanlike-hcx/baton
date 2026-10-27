@@ -34,12 +34,27 @@ export interface ApiResponse<T> {
  * assert on what ever reached the browser.
  */
 export async function testServer(
-  options: { autoApprove?: boolean; settings?: (s: WorkspaceSettings) => void; /** Restart on an earlier server's directories. */ reuse?: { home: string; root: string } } = {},
+  options: {
+    autoApprove?: boolean;
+    settings?: (s: WorkspaceSettings) => void;
+    /** Restart on an earlier server's directories. */
+    reuse?: { home: string; root: string };
+    /** Folder dialog stand-in; the default refuses instead of opening a real dialog. */
+    pickDirectory?: () => Promise<string | undefined>;
+  } = {},
 ) {
   const home = options.reuse?.home ?? tempDir("baton-home-");
   const root = options.reuse?.root ?? tempDir("baton-ws-");
   // Port 9 (discard) is never served, so the mock Cursor's MCP callbacks fail fast instead of reaching a dev server.
-  const state = new AppState({ baseUrl: "http://127.0.0.1:9", home, workspace: root, demo: true, cursorCommand: MOCK_CURSOR_COMMAND, demoTokensPerSecond: 100_000 });
+  const state = new AppState({
+    baseUrl: "http://127.0.0.1:9",
+    home,
+    workspace: root,
+    demo: true,
+    cursorCommand: MOCK_CURSOR_COMMAND,
+    demoTokensPerSecond: 100_000,
+    pickDirectory: options.pickDirectory ?? (async () => Promise.reject(new Error("测试没有配置文件夹选择"))),
+  });
   await state.init();
   const app = createApp(state);
   const responses: string[] = [];

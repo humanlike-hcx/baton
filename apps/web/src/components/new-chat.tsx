@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { post } from "@/lib/api";
 import { ACCESS } from "@/lib/format";
 import { findModel, lastModel, rememberModel, toChatModel, usableModels, useModels } from "@/lib/models";
-import { useSwitchProject } from "@/lib/projects";
+import { chooseProjectDirectory, useSwitchProject } from "@/lib/projects";
 import { href, navigate } from "@/lib/router";
 import { useBaton } from "@/lib/store";
 import type { ChatAccess, ChatModel, Thread } from "@/lib/types";
@@ -98,7 +98,15 @@ export function NewChat() {
             }}
           />
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Select value={state.workspace.root} onValueChange={(root) => (root === OPEN_OTHER ? navigate({ page: "settings", tab: "workspace" }) : void pickProject(root))}>
+            <Select
+              value={state.workspace.root}
+              onValueChange={(root) => {
+                if (root !== OPEN_OTHER) return void pickProject(root);
+                void chooseProjectDirectory()
+                  .then((picked) => picked && pickProject(picked))
+                  .catch((e: Error) => toast.error(e.message));
+              }}
+            >
               <SelectTrigger size="sm" className="max-w-48" aria-label="在哪个项目里">
                 <FolderOpen className="text-muted-foreground" />
                 <SelectValue />

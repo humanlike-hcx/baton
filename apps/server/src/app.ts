@@ -98,6 +98,14 @@ export function createApp(state: AppState): Hono {
     await state.refreshAuth();
     return c.json({ ok: true });
   });
+  app.post("/api/workspace/pick", async (c) => {
+    try {
+      const picked = await state.pickDirectory();
+      return c.json(picked ? { path: picked } : { cancelled: true });
+    } catch (error) {
+      bad((error as Error).message);
+    }
+  });
   app.post("/api/workspace/close", async (c) => {
     const { path: root } = await body<{ path: string }>(c);
     try {

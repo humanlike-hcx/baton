@@ -12,6 +12,39 @@ interface Project {
 
 const pendingApproval = (t: Thread) => t.items.find((i) => i.kind === "approval" && i.status === "pending");
 
+describe("HTTP API: the system folder dialog (US-97)", () => {
+  it("returns the chosen directory, a cancellation, and refuses a second dialog while one is open", async () => {
+    const chosen = fs.realpathSync(tempDir("baton-picked-"));
+    const s = await testServer({ pickDirectory: async () => `${chosen}/` });
+    expect(await s.post("/api/workspace/pick")).toEqual({ path: chosen });
+
+    const cancelled = await testServer({ pickDirectory: async () => undefined });
+    expect(await cancelled.post("/api/workspace/pick")).toEqual({ cancelled: true });
+
+    let release: (path: string) => void = () => {};
+    let opened: () => void = () => {};
+    const dialogOpen = new Promise<void>((resolve) => (opened = resolve));
+    const held = await testServer({
+      pickDirectory: () => {
+        opened();
+        return new Promise<string>((resolve) => (release = resolve));
+      },
+    });
+    const first = held.request("POST", "/api/workspace/pick");
+    await dialogOpen;
+    const second = await held.request("POST", "/api/workspace/pick");
+    expect(second.status).toBe(400);
+    expect(second.body.error).toContain("已经有一个文件夹选择框开着");
+    release(chosen);
+    expect((await first).body).toEqual({ path: chosen });
+
+    const broken = await testServer({ pickDirectory: async () => Promise.reject(new Error("文件夹选择框没有打开，请手填目录路径")) });
+    const failed = await broken.request("POST", "/api/workspace/pick");
+    expect(failed.status).toBe(400);
+    expect(failed.body.error).toContain("手填目录路径");
+  });
+});
+
 describe("HTTP API: one chat, one project (US-96)", () => {
   it("keeps a chat in another project running, answerable and on its own files while a different project is current", async () => {
     const s = await testServer({ autoApprove: false });

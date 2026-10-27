@@ -7,6 +7,12 @@ export function projectOfThread(state: AppStateResponse | undefined, threadId: s
   return state?.projects.find((p) => p.threads.some((t) => t.id === threadId));
 }
 
+/** The system folder dialog. Undefined when the user cancels. */
+export async function chooseProjectDirectory(): Promise<string | undefined> {
+  const picked = await post<{ path?: string; cancelled?: boolean }>("/api/workspace/pick");
+  return picked.path;
+}
+
 /** Makes `root` the current project; chats in other projects keep running. */
 export function useSwitchProject() {
   const { state, refresh } = useBaton();

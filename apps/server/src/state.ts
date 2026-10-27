@@ -30,6 +30,7 @@ import {
   type OrchestratorEvent,
   type TidyModel,
 } from "@baton/core";
+import { chooseDirectory, type DirectoryPicker } from "./picker.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(here, "../../..");
@@ -93,6 +94,8 @@ export interface AppStateOptions {
   cursorCommand?: string;
   /** Streaming speed of the demo models. */
   demoTokensPerSecond?: number;
+  /** Folder dialog for opening a project. Defaults to the system dialog; tests pass their own. */
+  pickDirectory?: DirectoryPicker;
 }
 
 export class AppState {
@@ -112,6 +115,7 @@ export class AppState {
   private cursorModelsCache = new Map<string, { at: number; models: CursorModel[]; error?: string }>();
   private chatgptLogin?: ChatGptLogin;
   private cursorLoginFlow?: { url?: string; cancel: () => void };
+  private picking?: Promise<string | undefined>;
   private clients = new Set<Broadcast>();
 
   constructor(private readonly options: AppStateOptions) {
@@ -227,6 +231,22 @@ export class AppState {
     if (!this.persisted.recent.includes(opened)) this.persisted.recent = [opened, ...this.persisted.recent].slice(0, 12);
     this.savePersisted();
     this.broadcast({ type: "state" });
+  }
+
+  /** System folder dialog. Undefined when the user cancels; one dialog at a time. */
+  pickDirectory(): Promise<string | undefined> {
+    if (this.picking) return Promise.reject(new Error("已经有一个文件夹选择框开着"));
+    const run = (async () => {
+      const picked = (await (this.options.pickDirectory ?? chooseDirectory)())?.trim();
+      if (!picked) return undefined;
+      return picked.replace(/\/+$/, "") || "/";
+    })();
+    this.picking = run;
+    // The caller awaits `run`; this copy only clears the lock, so its rejection must not surface on its own.
+    void run.finally(() => {
+      if (this.picking === run) this.picking = undefined;
+    }).catch(() => undefined);
+    return run;
   }
 
   /** Takes a project off the list (files untouched); the current one hands over to the next project. */
