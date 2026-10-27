@@ -41,10 +41,15 @@ export async function testServer(
     reuse?: { home: string; root: string };
     /** Folder dialog stand-in; the default refuses instead of opening a real dialog. */
     pickDirectory?: () => Promise<string | undefined>;
+    /** Runs after the temp directories exist and before the service starts. */
+    prepare?: (dirs: { home: string; root: string }) => void;
+    /** Codex CLI auth.json. Defaults to a file that is not there, so a real login is never imported. */
+    codexAuthFile?: string | ((home: string) => string);
   } = {},
 ) {
   const home = options.reuse?.home ?? tempDir("baton-home-");
   const root = options.reuse?.root ?? tempDir("baton-ws-");
+  options.prepare?.({ home, root });
   // Port 9 (discard) is never served, so the mock Cursor's MCP callbacks fail fast instead of reaching a dev server.
   const state = new AppState({
     baseUrl: "http://127.0.0.1:9",
@@ -54,6 +59,7 @@ export async function testServer(
     cursorCommand: MOCK_CURSOR_COMMAND,
     demoTokensPerSecond: 100_000,
     pickDirectory: options.pickDirectory ?? (async () => Promise.reject(new Error("测试没有配置文件夹选择"))),
+    codexAuthFile: (typeof options.codexAuthFile === "function" ? options.codexAuthFile(home) : options.codexAuthFile) ?? path.join(home, "no-such-codex-auth.json"),
   });
   await state.init();
   const app = createApp(state);

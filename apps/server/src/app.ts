@@ -7,6 +7,7 @@ import {
   KEY_TEMPLATES,
   ROUTES,
   cursorVariant,
+  supportsFastTier,
   listLessons,
   listMemory,
   modelFamily,
@@ -228,7 +229,12 @@ export function createApp(state: AppState): Hono {
           label: route.provider ? (state.keyAccount(route.provider)?.label ?? ROUTES.key.label) : ROUTES[route.source].label,
           unavailable: state.unavailable(route.source, undefined, route.provider),
           error,
-          models: models.map((m) => ({ ...m, family: modelFamily(m.id, provider), ...(route.source === "cursor" ? { variant: cursorVariant(m.id, m.name) } : {}) })),
+          models: models.map((m) => ({
+            ...m,
+            family: modelFamily(m.id, provider),
+            ...(route.source === "cursor" ? { variant: cursorVariant(m.id, m.name) } : {}),
+            ...(supportsFastTier(m.id) && (route.source === "chatgpt" || route.template === "openai") ? { fastMode: true } : {}),
+          })),
         };
       }),
     );
@@ -239,7 +245,7 @@ export function createApp(state: AppState): Hono {
     if (role !== "chat" && role !== "review") bad("role 只能是 chat 或 review");
     const threadId = c.req.query("thread") || undefined;
     const session = (threadId && state.sessionOfThread(threadId)) || state.sessionByRoot(state.ws.root)!;
-    const pick = { source: c.req.query("source"), model: c.req.query("model"), provider: c.req.query("provider"), thinking: c.req.query("thinking") };
+    const pick = { source: c.req.query("source"), model: c.req.query("model"), provider: c.req.query("provider"), thinking: c.req.query("thinking"), fast: c.req.query("fast") ?? undefined };
     const model = await state.resolveModel(pick, session).catch((e: Error) => bad(e.message));
     return c.json(await session.orchestrator.briefingPreview(model, role, threadId));
   });

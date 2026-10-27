@@ -15,9 +15,13 @@ import {
   cursorStatus,
   deviceId,
   readJson,
+  supportsFastTier,
   validateModelRoute,
   batonHome,
   chatgptMethod,
+  defaultCodexAuthFile,
+  importCodexLogin,
+  writeCodexRefresh,
   writeFileAtomic,
   DEMO_MODELS,
   ROUTES,
@@ -93,6 +97,8 @@ export interface ModelPickInput {
   model?: string;
   provider?: string;
   thinking?: string;
+  /** GPT fast service tier. */
+  fast?: boolean | string;
 }
 
 export interface AddKeyInput {
@@ -123,6 +129,8 @@ export interface AppStateOptions {
   demoTokensPerSecond?: number;
   /** Folder dialog for opening a project. Defaults to the system dialog; tests pass their own. */
   pickDirectory?: DirectoryPicker;
+  /** Codex CLI's auth.json. Tests point this at a fixture so a developer login is never imported. */
+  codexAuthFile?: string;
 }
 
 export class AppState {
@@ -147,12 +155,19 @@ export class AppState {
   private cursorLoginFlow?: { url?: string; cancel: () => void };
   private picking?: Promise<string | undefined>;
   private clients = new Set<Broadcast>();
+  private readonly codexAuthFile: string;
 
   constructor(private readonly options: AppStateOptions) {
     this.baseUrl = options.baseUrl;
     this.home = options.home ?? batonHome();
+    this.codexAuthFile = options.codexAuthFile ?? defaultCodexAuthFile();
     fs.mkdirSync(this.home, { recursive: true });
     this.credentials = new FileCredentialStore(this.home);
+    this.credentials.onSaved = (providerId, previous, next) => {
+      if (providerId !== CHATGPT_PROVIDERS.codex || previous?.type !== "oauth" || next.type !== "oauth") return;
+      const accountId = typeof next.accountId === "string" ? next.accountId : undefined;
+      writeCodexRefresh(this.codexAuthFile, previous.refresh, { access: next.access, refresh: next.refresh, accountId });
+    };
     this.pi = new PiExecutor({ credentials: this.credentials, agentDir: path.join(this.home, "pi-agent"), demoTokensPerSecond: options.demoTokensPerSecond });
     this.persisted = readJson<Persisted>(path.join(this.home, "state.json"), { recent: [] });
   }
@@ -239,6 +254,7 @@ export class AppState {
       }
     }
     await this.loadKeyAccounts();
+    await importCodexLogin(this.credentials, this.codexAuthFile);
     await this.refreshAuth(true);
   }
 
@@ -614,7 +630,11 @@ export class AppState {
       if (!found.thinking?.includes(pick.thinking as ThinkingLevel)) throw new Error(`${found.name || model} 不支持思考档位 ${pick.thinking}`);
       thinking = pick.thinking as ThinkingLevel;
     }
-    return { source: route, model, name: found.name || model, provider: account?.provider, account: account?.label, thinking };
+    const wantsFast = pick.fast === true || pick.fast === "1" || pick.fast === "true";
+    if (wantsFast && !(supportsFastTier(model) && (route === "chatgpt" || account?.template === "openai"))) {
+      throw new Error(`${found.name || model} 没有快速模式`);
+    }
+    return { source: route, model, name: found.name || model, provider: account?.provider, account: account?.label, thinking, ...(wantsFast ? { fast: true } : {}) };
   }
 
   private tidyModel(demo: boolean): TidyModel | undefined {

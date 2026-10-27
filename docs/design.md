@@ -14,11 +14,11 @@
 | Cursor Agent（通过 ACP） | Cursor 登录（`agent login`） | Cursor 账号可用的非 GPT、非 DeepSeek 模型 | 过滤掉 GPT 和 DeepSeek 家族，不提供 Auto |
 | Pi（我们的循环） | 任意多个 API key 账号 | 这个服务的全部模型（包括 GPT） | 按量计费，见下面「API key 账号」 |
 
-**思考档位**（US-100）：Pi 线路的档位来自 Pi 的 `getSupportedThinkingLevels`（模型不推理就没有档位），对话记在 `model.thinking`，运行时传给 `createAgentSession` 的 `thinkingLevel`，服务端拒绝模型不支持的档位；只换档位时对话里提示「思考档位从…改成…」。Cursor 把档位编在模型名里（`-low`…`-max`、`-thinking`、`-fast`，前后顺序不固定），`cursorVariant` 把它们拆成基础模型和变体，界面按基础模型合并成一行，换档位就是换成同一基础模型的另一个变体。
+**思考档位**（US-100）：Pi 线路的档位来自模型目录的 `thinkingLevelMap`：标成 `null` 的不列出，`xhigh` / `max` 只有目录点名了才列出，发到接口是同一个值的别名（Codex 把 `minimal` 发成 `low`）不单列。没有目录时只给普通档位。模型不推理就没有档位。对话记在 `model.thinking`，运行时传给 `createAgentSession` 的 `thinkingLevel`，服务端拒绝模型不支持的档位；只换档位时对话里提示「思考档位从…改成…」。没选档位时按 Pi 的默认「中」显示，这个模型没有「中」就就近取一档，菜单里不另加「默认」。Cursor 把档位编在模型名里（`-low`…`-max`、`-thinking`、`-fast`，前后顺序不固定），`cursorVariant` 把它们拆成基础模型和变体，界面按基础模型合并成一行，换档位就是换成同一基础模型的另一个变体。模型菜单里档位收成一行子菜单，当前档位写在这一行上；有快速变体的模型在同一菜单里用「快速」开关切换。GPT-5.6 和 GPT-6 的「快速」不是变体：打开后同一次请求带 `service_tier: "fast"`（Pi 的简易流不会转发这个字段，所以执行器改走对应的 `stream`）。
 
 **上下文圆圈**（US-98）：Pi 运行结束时取 `session.getContextUsage()`，记在运行的 `context: {tokens, window}`；界面取这个模型在这个对话里最近一次回复的数字，还没回复时按模型的窗口算 0%。Cursor 不报告用量，圆圈显示「—」并说明原因。
 
-**输入框**（US-99）：新对话和对话页共用 `Composer`：权限胶囊（只读 / 每次问我 / 允许直接改，后者橙色）、模型胶囊（模型名 · 档位，下拉里切档位或「换模型…」）、圆形发送按钮；下面一行是项目、对话编号、花费和上下文圆圈。
+**输入框**（US-99）：新对话和对话页共用 `Composer`：权限胶囊（只读 / 每次问我 / 允许直接改，后者橙色；每档的一句说明只出现在这个菜单里）、模型胶囊（模型名 · 档位，下拉里用子菜单切档位、用开关切快速，或「换模型…」）、圆形发送按钮；下面一行是项目、对话编号、花费和上下文圆圈。
 
 **API key 账号**（US-101）：
 - 账号记在 `~/.baton/keys.json`（服务模板、显示名、Pi provider、自定义地址和模型列表），key 本身只在凭据文件里，存在账号的 provider 名下。线路记为 `source: "key"`，对话和运行另记 `provider` 和账号名。
@@ -30,7 +30,7 @@
 ChatGPT 有两种登录方式，都走 ChatGPT 订阅，同一时间只保留一个凭证：
 
 - **Sign in with ChatGPT**：Pi 的 `openai` provider，OpenAI 给第三方 agent 的入口，授权必须带 `chatgpt.tokens.use.direct`，不是每个账号都开放。
-- **Codex 账号**：Pi 的 `openai-codex` provider，与 Codex CLI 是同一套 OAuth（同一 client ID、`localhost:1455` 回调），请求发到 `chatgpt.com/backend-api`。Pi 把它标成 legacy，所以只作备选。
+- **Codex 账号**：Pi 的 `openai-codex` provider，与 Codex CLI 是同一套 OAuth（同一 client ID、`localhost:1455` 回调），请求发到 `chatgpt.com/backend-api`。Pi 把它标成 legacy，所以只作备选。启动时如果 Baton 还没有 ChatGPT 登录，就从 `~/.codex/auth.json` 导入 Codex CLI 已经存好的 ChatGPT 登录（US-102）：`auth_mode` 必须空着或是 `chatgpt`，并且有 access token 和 refresh token。API key 模式不导入。导入只写进 `~/.baton/credentials.json`。之后 Pi 若刷新了这张 token，而 Codex 文件里的 refresh token 仍是刷新前那张，就把新的 access 和 refresh 写回去，`id_token` 保持不动。退出登录不删 Codex 的文件。ChatGPT 桌面端没有这份文件，不读。
 
 GPT 线路的 provider 始终记为 `openai`；运行时 Pi 执行器按已登录的方式选 provider，两者都在时优先 Sign in with ChatGPT。模型页和选择框里的 GPT 模型列表也来自已登录的方式。Codex 账号能用的模型比较少（GPT-5.6 和 GPT-6 系列），选中的模型它没有时，运行在发请求之前就失败，并提示换模型。
 

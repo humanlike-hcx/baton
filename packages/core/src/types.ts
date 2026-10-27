@@ -28,6 +28,8 @@ export interface ChatModel {
   account?: string;
   /** Pi routes: the reasoning level; absent means the model's default. */
   thinking?: ThinkingLevel;
+  /** GPT on ChatGPT or an OpenAI key: run on the fast service tier. */
+  fast?: boolean;
 }
 
 /** Who answers a run: a model on its route, with the permissions this run allows. Built per run, never stored. */
@@ -41,6 +43,8 @@ export interface RunAgent {
   provider: string;
   model: string;
   thinking?: ThinkingLevel;
+  /** GPT: fast service tier for this run. */
+  fast?: boolean;
   permissions: AgentPermissions;
 }
 
@@ -118,6 +122,8 @@ export interface RunRecord {
   model: string;
   family: string;
   thinking?: ThinkingLevel;
+  /** GPT: this run used the fast service tier. */
+  fast?: boolean;
   role: Role;
   status: RunStatus;
   startedAt: string;

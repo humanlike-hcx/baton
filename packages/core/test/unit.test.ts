@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { runChecks } from "../src/checks.ts";
 import { compileBriefing } from "../src/context.ts";
 import { RULE_FILES, defaultSettings } from "../src/defaults.ts";
-import { cursorVariant, modelFamily, thinkingLabel, validateModelRoute } from "../src/families.ts";
+import { FileCredentialStore, readCodexCredential, writeCodexRefresh } from "../src/credentials.ts";
+import { cursorVariant, defaultThinkingLevel, distinctThinkingLevels, modelFamily, normalizeThinkingLevel, supportsFastTier, thinkingLabel, validateModelRoute } from "../src/families.ts";
 import { listLessons, listMemory, recordLesson, remember } from "../src/memory.ts";
 import { applyChunks, parsePatch } from "../src/patch.ts";
 import { REVIEW_PERMISSIONS, PermissionError, accessPermissions, resolveWorkspacePath, shellPolicy } from "../src/permissions.ts";
@@ -68,6 +69,25 @@ describe("Cursor model variants (US-100)", () => {
     expect(cursorVariant("gemini-3.1-pro", "Gemini 3.1 Pro")).toEqual({ base: "gemini-3.1-pro", baseName: "Gemini 3.1 Pro", reasoning: false, fast: false });
     expect(thinkingLabel("xhigh")).toBe("极高");
     expect(thinkingLabel(undefined)).toBe("默认");
+  });
+
+  it("lists only the efforts a model can actually send, without aliases", () => {
+    // Codex catalog names xhigh/max and maps minimal onto low; the missing ordinary levels are real.
+    expect(distinctThinkingLevels(true, { xhigh: "xhigh", max: "max", minimal: "low" })).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    // GPT-6.1 cannot turn thinking off, and minimal is the same request as low.
+    expect(distinctThinkingLevels(true, { off: null, minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" })).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    // The API catalog for GPT-5.6: none, low, medium, high, xhigh, max. minimal is explicitly absent.
+    expect(distinctThinkingLevels(true, { off: "none", minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" })).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(distinctThinkingLevels(true, { minimal: null, low: null, medium: null, high: "high", max: "max" })).toEqual(["off", "high", "max"]);
+    expect(distinctThinkingLevels(false, { high: "high" })).toBeUndefined();
+    expect(defaultThinkingLevel(["off", "low", "medium", "high"])).toBe("medium");
+    expect(defaultThinkingLevel(["off", "high", "max"])).toBe("high");
+    expect(normalizeThinkingLevel("minimal", ["off", "low", "medium", "high"])).toBe("low");
+    expect(normalizeThinkingLevel(undefined, ["low", "medium", "high"])).toBe("medium");
+    expect(supportsFastTier("gpt-5.6-luna")).toBe(true);
+    expect(supportsFastTier("gpt-6.1-sol")).toBe(true);
+    expect(supportsFastTier("gpt-5.5")).toBe(false);
+    expect(supportsFastTier("deepseek-v4-pro")).toBe(false);
   });
 });
 
@@ -250,5 +270,32 @@ describe("workspace, memory, lessons and briefing", () => {
     expect(review.text).toContain("submit_review");
     expect(review.text).toContain("早先的话题");
     expect(review.text).toContain("notes/a.md");
+  });
+
+  it("reads a Codex CLI ChatGPT login and writes a refresh back only for that token (US-102)", async () => {
+    const jwt = (payload: object) => {
+      const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+      return `${part({ alg: "none" })}.${part(payload)}.x`;
+    };
+    const access = jwt({ exp: 2_000_000_000, "https://api.openai.com/auth": { chatgpt_account_id: "acct_from_jwt" } });
+    const file = path.join(tempDir(), "auth.json");
+    fs.writeFileSync(file, JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: "keep-me", access_token: access, refresh_token: "refresh-old", account_id: "acct_file" }, last_refresh: "then" }));
+    expect(readCodexCredential(file)).toMatchObject({ type: "oauth", access, refresh: "refresh-old", accountId: "acct_file", expires: 2_000_000_000_000 });
+    expect(readCodexCredential(path.join(tempDir(), "missing.json"))).toBeUndefined();
+    fs.writeFileSync(path.join(path.dirname(file), "apikey.json"), JSON.stringify({ auth_mode: "apikey", tokens: { access_token: access, refresh_token: "refresh-old" } }));
+    expect(readCodexCredential(path.join(path.dirname(file), "apikey.json"))).toBeUndefined();
+
+    writeCodexRefresh(file, "someone-else", { access: "nope", refresh: "nope" });
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).tokens.refresh_token).toBe("refresh-old");
+    writeCodexRefresh(file, "refresh-old", { access: "access-new", refresh: "refresh-new", accountId: "acct_file" });
+    const updated = JSON.parse(fs.readFileSync(file, "utf8"));
+    expect(updated.tokens).toMatchObject({ id_token: "keep-me", access_token: "access-new", refresh_token: "refresh-new", account_id: "acct_file" });
+    expect(updated.auth_mode).toBe("chatgpt");
+
+    const store = new FileCredentialStore(tempDir());
+    const seen: string[] = [];
+    store.onSaved = (providerId) => seen.push(providerId);
+    await store.modify("openai-codex", async () => ({ type: "oauth", access: "a", refresh: "r", expires: 1 }));
+    expect(seen).toEqual(["openai-codex"]);
   });
 });

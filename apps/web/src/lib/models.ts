@@ -4,7 +4,7 @@ import { costLabel } from "./format";
 import { useBaton } from "./store";
 import type { ChatModel, ModelOption, ModelRoute, Thread } from "./types";
 
-export type ModelRef = Pick<ChatModel, "source" | "model" | "provider" | "thinking">;
+export type ModelRef = Pick<ChatModel, "source" | "model" | "provider" | "thinking" | "fast">;
 
 interface Snapshot {
   key?: string;
@@ -80,9 +80,9 @@ export function sameModel(a?: ModelRef, b?: ModelRef): boolean {
   return Boolean(a && b && a.source === b.source && a.model === b.model && (a.provider ?? "") === (b.provider ?? ""));
 }
 
-/** Same account, model and thinking level. */
+/** Same account, model, thinking level and fast tier. */
 export function sameChoice(a?: ModelRef, b?: ModelRef): boolean {
-  return sameModel(a, b) && (a?.thinking ?? "") === (b?.thinking ?? "");
+  return sameModel(a, b) && (a?.thinking ?? "") === (b?.thinking ?? "") && Boolean(a?.fast) === Boolean(b?.fast);
 }
 
 export function toChatModel(p: ModelPick): ChatModel {
@@ -95,8 +95,8 @@ export function toChatModel(p: ModelPick): ChatModel {
 }
 
 /** What a model pick sends to the server. */
-export function pickBody(model: ModelRef): Record<string, string> {
-  return { source: model.source, model: model.model, ...(model.provider ? { provider: model.provider } : {}), ...(model.thinking ? { thinking: model.thinking } : {}) };
+export function pickBody(model: ModelRef): Record<string, string | boolean> {
+  return { source: model.source, model: model.model, ...(model.provider ? { provider: model.provider } : {}), ...(model.thinking ? { thinking: model.thinking } : {}), ...(model.fast ? { fast: true } : {}) };
 }
 
 /** One row of the picker: a model, or for Cursor every variant of one base model. */
@@ -184,7 +184,7 @@ const LAST_MODEL = "baton.lastModel";
 
 export function rememberModel(model: ChatModel): void {
   try {
-    localStorage.setItem(LAST_MODEL, JSON.stringify({ source: model.source, model: model.model, provider: model.provider, thinking: model.thinking }));
+    localStorage.setItem(LAST_MODEL, JSON.stringify({ source: model.source, model: model.model, provider: model.provider, thinking: model.thinking, fast: model.fast }));
   } catch {
     /* storage unavailable */
   }

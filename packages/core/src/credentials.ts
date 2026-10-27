@@ -45,13 +45,18 @@ export class FileCredentialStore implements CredentialStore {
     return Object.entries(this.load()).map(([providerId, c]) => ({ providerId, type: c.type }));
   }
 
+  /** Called after a credential is saved. Used to mirror a refreshed Codex token back to Codex CLI. */
+  onSaved?: (providerId: string, previous: Credential | undefined, next: Credential) => void;
+
   modify(providerId: string, fn: (current: Credential | undefined) => Promise<Credential | undefined>): Promise<Credential | undefined> {
     return this.serial(async () => {
       const data = this.load();
-      const next = await fn(data[providerId]);
+      const previous = data[providerId];
+      const next = await fn(previous);
       if (next) {
         data[providerId] = next;
         this.save(data);
+        this.onSaved?.(providerId, previous, next);
       }
       return data[providerId];
     });
@@ -77,6 +82,78 @@ export async function chatgptMethod(credentials: CredentialStore): Promise<ChatG
     if ((await credentials.read(CHATGPT_PROVIDERS[method]))?.type === "oauth") return method;
   }
   return undefined;
+}
+
+/** Codex CLI's ChatGPT login. The ChatGPT desktop app does not write this file. */
+export function defaultCodexAuthFile(): string {
+  return path.join(os.homedir(), ".codex", "auth.json");
+}
+
+const OPENAI_AUTH_CLAIM = "https://api.openai.com/auth";
+
+function jwtPayload(token: string): Record<string, unknown> | undefined {
+  const part = token.split(".")[1];
+  if (!part) return undefined;
+  try {
+    const json = JSON.parse(Buffer.from(part, "base64url").toString("utf8")) as unknown;
+    return json && typeof json === "object" ? (json as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The Codex CLI login, in Pi's oauth shape, when `file` is a ChatGPT-account login
+ * (`auth_mode` absent or `"chatgpt"`, with an access token and a refresh token).
+ * An API-key Codex file is not a subscription and is ignored.
+ */
+export function readCodexCredential(file: string): Extract<Credential, { type: "oauth" }> | undefined {
+  const doc = readJson<Record<string, unknown> | undefined>(file, undefined);
+  if (!doc || (doc.auth_mode !== undefined && doc.auth_mode !== "chatgpt")) return undefined;
+  const tokens = doc.tokens;
+  if (!tokens || typeof tokens !== "object") return undefined;
+  const access = (tokens as { access_token?: unknown }).access_token;
+  const refresh = (tokens as { refresh_token?: unknown }).refresh_token;
+  if (typeof access !== "string" || !access || typeof refresh !== "string" || !refresh) return undefined;
+  const fromFile = (tokens as { account_id?: unknown }).account_id;
+  const claim = jwtPayload(access)?.[OPENAI_AUTH_CLAIM];
+  const fromJwt = claim && typeof claim === "object" ? (claim as { chatgpt_account_id?: unknown }).chatgpt_account_id : undefined;
+  const accountId = typeof fromFile === "string" && fromFile ? fromFile : typeof fromJwt === "string" ? fromJwt : undefined;
+  const exp = jwtPayload(access)?.exp;
+  return {
+    type: "oauth",
+    access,
+    refresh,
+    expires: typeof exp === "number" ? exp * 1000 : 0,
+    ...(accountId ? { accountId } : {}),
+  };
+}
+
+/** Copies a Codex CLI login into Baton when Baton has no ChatGPT login of its own. */
+export async function importCodexLogin(credentials: CredentialStore, file: string): Promise<boolean> {
+  if (await chatgptMethod(credentials)) return false;
+  const credential = readCodexCredential(file);
+  if (!credential) return false;
+  await credentials.modify(CHATGPT_PROVIDERS.codex, async () => credential);
+  return true;
+}
+
+/**
+ * After Baton refreshes a token it imported, write the new access and refresh tokens back
+ * so Codex CLI is not left holding a refresh token the server has already rotated.
+ * Does nothing when the file's refresh token is no longer the one that was refreshed.
+ */
+export function writeCodexRefresh(file: string, previousRefresh: string, next: { access: string; refresh: string; accountId?: string }): void {
+  const doc = readJson<Record<string, unknown> | undefined>(file, undefined);
+  const tokens = doc?.tokens;
+  if (!doc || !tokens || typeof tokens !== "object") return;
+  const current = tokens as { refresh_token?: unknown; access_token?: string; account_id?: string };
+  if (current.refresh_token !== previousRefresh) return;
+  current.access_token = next.access;
+  current.refresh_token = next.refresh;
+  if (next.accountId) current.account_id = next.accountId;
+  doc.last_refresh = new Date().toISOString();
+  writeFileAtomic(file, `${JSON.stringify(doc, null, 2)}\n`, 0o600);
 }
 
 /** Stable per-installation UUID; Sign in with ChatGPT requires one. */

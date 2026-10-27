@@ -65,11 +65,68 @@ export function validateModelRoute(source: string, model: string): string | unde
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
+/** GPT-5.6 and GPT-6 can run in OpenAI fast mode: the same model and effort, on the fast service tier. */
+export function supportsFastTier(modelId: string): boolean {
+  return /^(gpt-5\.6|gpt-6)([.-]|$)/.test(modelId);
+}
+
 const THINKING_LABELS: Record<string, string> = { off: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高" };
 
 export function thinkingLabel(level: string | undefined): string {
   return level ? (THINKING_LABELS[level] ?? level) : "默认";
 }
+
+/**
+ * The levels a model can actually be asked for. A catalog map marks an unsupported level `null`.
+ * `xhigh` and `max` count only when the map names them. A level that sends the same value as
+ * another (Codex maps `minimal` to `low`) is not listed again. No map means the ordinary levels,
+ * not the extended ones.
+ */
+export function distinctThinkingLevels(
+  reasoning: boolean,
+  map?: Partial<Record<(typeof THINKING_LEVELS)[number], string | null>>,
+): ThinkingLevelName[] | undefined {
+  if (!reasoning) return undefined;
+  const supported = new Map<ThinkingLevelName, string>();
+  for (const level of THINKING_LEVELS) {
+    const mapped = map?.[level];
+    if (mapped === null) continue;
+    if ((level === "xhigh" || level === "max") && mapped === undefined) continue;
+    supported.set(level, mapped ?? level);
+  }
+  const chosen: ThinkingLevelName[] = [];
+  const used = new Set<string>();
+  for (const level of THINKING_LEVELS) {
+    const wire = supported.get(level);
+    if (!wire || used.has(wire)) continue;
+    const canonName = wire === "none" ? "off" : wire;
+    const canon = (THINKING_LEVELS as readonly string[]).includes(canonName) && supported.has(canonName as ThinkingLevelName) ? (canonName as ThinkingLevelName) : level;
+    if (level !== canon) continue;
+    used.add(wire);
+    chosen.push(canon);
+  }
+  return chosen.some((level) => level !== "off") ? chosen : undefined;
+}
+
+/** A stored level the model no longer lists (an alias, or nothing picked) shown as the level that actually runs. */
+export function normalizeThinkingLevel(level: string | undefined, levels: readonly string[]): ThinkingLevelName | undefined {
+  if (level && levels.includes(level)) return level as ThinkingLevelName;
+  if (level === "minimal" && levels.includes("low")) return "low";
+  if ((level === "none" || level === "off") && levels.includes("off")) return "off";
+  return defaultThinkingLevel(levels);
+}
+
+/** What runs when a chat has not picked a level: Pi's own default is medium, clamped to a level the model has. */
+export function defaultThinkingLevel(levels: readonly string[]): ThinkingLevelName | undefined {
+  const order: ThinkingLevelName[] = [...THINKING_LEVELS];
+  const has = (level: ThinkingLevelName) => levels.includes(level);
+  const start = order.indexOf("medium");
+  for (let i = start; i < order.length; i++) if (has(order[i]!)) return order[i];
+  for (let i = start - 1; i >= 0; i--) if (has(order[i]!)) return order[i];
+  return undefined;
+}
+
+type ThinkingLevelName = (typeof THINKING_LEVELS)[number];
 
 /** One of the variants Cursor lists a model as: its effort, whether it thinks, whether it's the fast one. */
 export interface CursorVariant {

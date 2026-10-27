@@ -90,7 +90,7 @@ describe("HTTP API: the demo workspace on first start (US-83)", () => {
     const home = path.join(tempDir("baton-home-link-"), "home");
     fs.symlinkSync(real, home);
     const start = async () => {
-      const state = new AppState({ baseUrl: "http://127.0.0.1:9", home });
+      const state = new AppState({ baseUrl: "http://127.0.0.1:9", home, codexAuthFile: path.join(home, "no-such-codex-auth.json") });
       await state.init();
       const res = await createApp(state).request("/api/state", { headers: { host: HOST } });
       return (await res.json()) as { workspace: { root: string; name: string; demo: boolean } };
@@ -212,6 +212,51 @@ describe("HTTP API: ChatGPT through the Codex login (US-88)", () => {
     }
     expect(chatgpt).toMatchObject({ loggedIn: false, error: "State mismatch" });
     expect(chatgpt.pending).toBeUndefined();
+  });
+});
+
+describe("HTTP API: reuse the Codex CLI login (US-102)", () => {
+  const jwt = (payload: object) => {
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    return `${part({ alg: "none" })}.${part(payload)}.x`;
+  };
+  const codexPath = (home: string) => path.join(home, "codex-auth.json");
+
+  it("signs in from Codex CLI on startup, and logging out of Baton leaves that file alone", async () => {
+    const access = jwt({ exp: 2_000_000_000, "https://api.openai.com/auth": { chatgpt_account_id: "acct_jwt" } });
+    const auth = { auth_mode: "chatgpt", OPENAI_API_KEY: null, tokens: { id_token: "id-token", access_token: access, refresh_token: "refresh-1", account_id: "acct_1" } };
+    const s = await testServer({
+      prepare: ({ home }) => fs.writeFileSync(codexPath(home), JSON.stringify(auth), { mode: 0o600 }),
+      codexAuthFile: codexPath,
+    });
+    expect((await s.get("/api/state")).auth.chatgpt).toMatchObject({ loggedIn: true, method: "codex" });
+    const stored = JSON.parse(fs.readFileSync(path.join(s.home, "credentials.json"), "utf8"));
+    expect(stored["openai-codex"]).toMatchObject({ type: "oauth", refresh: "refresh-1", accountId: "acct_1" });
+    expect(JSON.stringify(stored)).not.toContain("id-token");
+
+    await s.post("/api/auth/chatgpt/logout");
+    expect((await s.get("/api/state")).auth.chatgpt.loggedIn).toBe(false);
+    expect(JSON.parse(fs.readFileSync(codexPath(s.home), "utf8"))).toEqual(auth);
+    expect(JSON.parse(fs.readFileSync(path.join(s.home, "credentials.json"), "utf8"))).toEqual({});
+  });
+
+  it("does not replace a ChatGPT login Baton already has, and ignores an API-key Codex file", async () => {
+    const own = { type: "oauth", access: "own-access", refresh: "own-refresh", expires: Date.now() + 3_600_000 };
+    const kept = await testServer({
+      prepare: ({ home }) => {
+        fs.writeFileSync(path.join(home, "credentials.json"), JSON.stringify({ openai: own }), { mode: 0o600 });
+        fs.writeFileSync(codexPath(home), JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "codex-access", refresh_token: "codex-refresh", account_id: "acct" } }), { mode: 0o600 });
+      },
+      codexAuthFile: codexPath,
+    });
+    expect((await kept.get("/api/state")).auth.chatgpt).toMatchObject({ loggedIn: true, method: "chatgpt" });
+    expect(JSON.parse(fs.readFileSync(path.join(kept.home, "credentials.json"), "utf8")).openai).toMatchObject(own);
+
+    const apikey = await testServer({
+      prepare: ({ home }) => fs.writeFileSync(codexPath(home), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-test", tokens: null })),
+      codexAuthFile: codexPath,
+    });
+    expect((await apikey.get("/api/state")).auth.chatgpt.loggedIn).toBe(false);
   });
 });
 

@@ -59,6 +59,8 @@ export interface ModelOption {
   thinking?: ThinkingLevel[];
   /** Cursor: which variant of a model this id is. */
   variant?: CursorVariant;
+  /** GPT on ChatGPT or an OpenAI key: this model can use the fast service tier. */
+  fastMode?: boolean;
 }
 
 /** One account route from `/api/models`: why it can't be used right now (if so), and every model it offers. */

@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getSupportedThinkingLevels, type CredentialStore } from "@earendil-works/pi-ai";
+import { clampThinkingLevel, type CredentialStore } from "@earendil-works/pi-ai";
+import { buildBaseOptions } from "@earendil-works/pi-ai/api/simple-options";
+import { stream as openaiStream } from "@earendil-works/pi-ai/api/openai-responses";
+import { stream as codexStream } from "@earendil-works/pi-ai/api/openai-codex-responses";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import {
   DefaultResourceLoader,
@@ -11,12 +14,27 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { CHATGPT_PROVIDERS, chatgptMethod } from "../credentials.ts";
+import { distinctThinkingLevels } from "../families.ts";
 import { keyTemplate, type KeyAccount } from "../keys.ts";
 import { runTool, type ToolSpec } from "../tools.ts";
 import type { ThinkingLevel } from "../types.ts";
 import { newId } from "../util.ts";
 import { DEMO_CONTEXT_WINDOW, demoComplete, demoScript } from "./demo.ts";
 import { VERDICT_REMINDER, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
+
+type StreamCall = (model: { api?: string }, context: unknown, options?: { apiKey?: string; reasoning?: ThinkingLevel; toolChoice?: "auto" | "none" | "required" }) => unknown;
+
+/** OpenAI fast mode is a service tier on the same model, which Pi's simple stream does not forward. */
+function fastTierStream(inner: StreamCall): StreamCall {
+  return (model, context, options) => {
+    const api = model.api;
+    if (api !== "openai-responses" && api !== "openai-codex-responses") return inner(model, context, options);
+    const stream = api === "openai-codex-responses" ? codexStream : openaiStream;
+    const clamped = options?.reasoning ? clampThinkingLevel(model as never, options.reasoning) : undefined;
+    const base = buildBaseOptions(model as never, context as never, options as never, options?.apiKey);
+    return stream(model as never, context as never, { ...base, toolChoice: options?.toolChoice, reasoningEffort: clamped === "off" ? undefined : clamped, serviceTier: "fast" });
+  };
+}
 
 function resultText(result: unknown): string {
   const content = (result as { content?: { type: string; text?: string }[] } | undefined)?.content;
@@ -80,8 +98,8 @@ export class PiExecutor implements Executor {
   async providerModels(provider: string): Promise<{ id: string; name: string; contextWindow?: number; thinking?: ThinkingLevel[] }[]> {
     const runtime = await this.runtime();
     return runtime.getModels(provider).map((m) => {
-      const levels = (m as { reasoning?: boolean }).reasoning ? (getSupportedThinkingLevels(m) as ThinkingLevel[]) : [];
-      return { id: m.id, name: m.name, contextWindow: m.contextWindow, thinking: levels.some((l) => l !== "off") ? levels : undefined };
+      const thinking = distinctThinkingLevels(Boolean((m as { reasoning?: boolean }).reasoning), (m as { thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>> }).thinkingLevelMap);
+      return { id: m.id, name: m.name, contextWindow: m.contextWindow, thinking };
     });
   }
 
@@ -189,6 +207,7 @@ export class PiExecutor implements Executor {
       customTools: customTools as never,
     });
     await session.bindExtensions({});
+    if (agent.fast) session.agent.streamFunction = fastTierStream(session.agent.streamFunction as StreamCall) as typeof session.agent.streamFunction;
 
     let lastError: string | undefined;
     let inText = false;

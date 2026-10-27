@@ -1,19 +1,22 @@
 import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronsUpDown, Loader2, RefreshCw, Search, Sparkles } from "lucide-react";
-import { familyLabel, thinkingLabel } from "@baton/core/families";
+import { familyLabel, normalizeThinkingLevel, thinkingLabel } from "@baton/core/families";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { SOURCE_LABEL } from "@/lib/format";
 import { effortRank, entryOf, pickVariant, routeEntries, routeKey, shortReason, toChatModel, useModels, type ModelEntry, type ModelRef } from "@/lib/models";
@@ -26,12 +29,16 @@ function chooseFrom(entry: ModelEntry, current?: ModelRef, currentOption?: Model
   const option = entry.options.length > 1 ? pickVariant(entry.options, currentOption?.variant) : entry.options[0]!;
   const model = toChatModel({ route: entry.route, option });
   if (current?.thinking && option.thinking?.includes(current.thinking)) model.thinking = current.thinking;
+  if (current?.fast && option.fastMode) model.fast = true;
   return model;
 }
 
-/** Short level text for a model: Pi's thinking level, or Cursor's variant. */
-export function levelText(option: ModelOption | undefined, thinking?: ThinkingLevel): string | undefined {
-  if (option?.thinking) return thinkingLabel(thinking);
+/** Short level text for a model: Pi's thinking level, or Cursor's variant. `fast` is GPT's service tier. */
+export function levelText(option: ModelOption | undefined, thinking?: ThinkingLevel, fast?: boolean): string | undefined {
+  if (option?.thinking?.length || option?.fastMode) {
+    const parts = [option?.thinking?.length ? thinkingLabel(normalizeThinkingLevel(thinking, option.thinking ?? [])) : undefined, fast ? "快速" : undefined].filter(Boolean);
+    return parts.length ? parts.join(" · ") : undefined;
+  }
   const v = option?.variant;
   if (!v) return undefined;
   const parts = [v.effort ? thinkingLabel(v.effort) : undefined, v.reasoning ? "思考" : undefined, v.fast ? "快速" : undefined].filter(Boolean);
@@ -184,7 +191,7 @@ export function ModelPicker({
   const { routes } = useModels();
   const [open, setOpen] = useState(false);
   const current = entryOf(routes, value);
-  const level = levelText(current?.option, value?.thinking);
+  const level = levelText(current?.option, value?.thinking, value?.fast);
   return (
     <>
       <Button variant="outline" className={cn("justify-between font-normal", className)} aria-label="选择模型" onClick={() => setOpen(true)}>
@@ -198,13 +205,51 @@ export function ModelPicker({
   );
 }
 
+/** A switch row that stays open, for Fast or a thinking variant. */
+function ToggleRow({ label, checked, onCheckedChange }: { label: string; checked: boolean; onCheckedChange: (on: boolean) => void }) {
+  return (
+    <DropdownMenuItem
+      onSelect={(event) => {
+        event.preventDefault();
+        onCheckedChange(!checked);
+      }}
+      className="justify-between"
+    >
+      {label}
+      <Switch size="sm" checked={checked} tabIndex={-1} aria-hidden className="pointer-events-none" />
+    </DropdownMenuItem>
+  );
+}
+
+/** One row that opens the levels, with the current level written on the row. */
+function LevelSubmenu({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: { value: string; label: string }[] }) {
+  const current = options.find((o) => o.value === value)?.label ?? options[0]?.label;
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        {label}
+        <span className="ml-auto text-xs text-muted-foreground">{current}</span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent>
+        <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
+          {options.map((o) => (
+            <DropdownMenuRadioItem key={o.value} value={o.value}>
+              {o.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
 /** The composer's model pill: the model and its level, a menu to change the level, and the full picker. */
 export function ModelMenu({ value, onChange, disabled }: { value?: ModelRef; onChange: (model: ChatModel) => void; disabled?: boolean }) {
   const { routes } = useModels();
   const [picking, setPicking] = useState(false);
   const current = entryOf(routes, value);
   const option = current?.option;
-  const level = levelText(option, value?.thinking);
+  const level = levelText(option, value?.thinking, value?.fast);
   const variant = option?.variant;
   const variants = current && current.entry.options.length > 1 ? current.entry.options : [];
   const sameKind = variants.filter((o) => o.variant?.reasoning === variant?.reasoning && o.variant?.fast === variant?.fast);
@@ -243,50 +288,34 @@ export function ModelMenu({ value, onChange, disabled }: { value?: ModelRef; onC
           )}
           <ChevronDown className="size-3 shrink-0 opacity-60" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuContent align="end" className="w-56">
           <DropdownMenuLabel className="truncate text-xs text-muted-foreground">
             {current.entry.name} · {current.entry.route.label}
           </DropdownMenuLabel>
-          {thinkingOptions && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-xs">思考档位</DropdownMenuLabel>
-              <DropdownMenuRadioGroup value={value?.thinking ?? ""} onValueChange={(t) => onChange({ ...toChatModel({ route: current.entry.route, option: option! }), ...(t ? { thinking: t as ThinkingLevel } : {}) })}>
-                <DropdownMenuRadioItem value="">默认</DropdownMenuRadioItem>
-                {thinkingOptions.map((t) => (
-                  <DropdownMenuRadioItem key={t} value={t}>
-                    {thinkingLabel(t)}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </>
+          {(option?.fastMode || (thinkingOptions && thinkingOptions.length > 1) || canToggle("fast") || canToggle("reasoning") || efforts.length > 1) && <DropdownMenuSeparator />}
+          {(option?.fastMode || canToggle("fast")) && (
+            <ToggleRow
+              label="快速"
+              checked={Boolean(option?.fastMode ? value?.fast : variant?.fast)}
+              onCheckedChange={(on) => (option?.fastMode ? onChange({ ...toChatModel({ route: current.entry.route, option: option! }), ...(value?.thinking ? { thinking: value.thinking } : {}), ...(on ? { fast: true } : {}) }) : toVariant({ fast: on }))}
+            />
           )}
-          {variants.length > 0 && (
-            <>
-              <DropdownMenuSeparator />
-              {efforts.length > 1 && (
-                <>
-                  <DropdownMenuLabel className="text-xs">档位</DropdownMenuLabel>
-                  <DropdownMenuRadioGroup value={variant?.effort ?? ""} onValueChange={(e) => toVariant({ effort: e || undefined })}>
-                    {efforts.map((e) => (
-                      <DropdownMenuRadioItem key={e ?? ""} value={e ?? ""}>
-                        {e ? thinkingLabel(e) : "默认"}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </>
-              )}
-              {canToggle("reasoning") && (
-                <DropdownMenuCheckboxItem checked={Boolean(variant?.reasoning)} onCheckedChange={(on) => toVariant({ reasoning: on })}>
-                  思考
-                </DropdownMenuCheckboxItem>
-              )}
-              {canToggle("fast") && (
-                <DropdownMenuCheckboxItem checked={Boolean(variant?.fast)} onCheckedChange={(on) => toVariant({ fast: on })}>
-                  快速
-                </DropdownMenuCheckboxItem>
-              )}
-            </>
+          {canToggle("reasoning") && <ToggleRow label="思考" checked={Boolean(variant?.reasoning)} onCheckedChange={(on) => toVariant({ reasoning: on })} />}
+          {thinkingOptions && thinkingOptions.length > 1 && (
+            <LevelSubmenu
+              label="档位"
+              value={normalizeThinkingLevel(value?.thinking, thinkingOptions) ?? ""}
+              onChange={(t) => onChange({ ...toChatModel({ route: current.entry.route, option: option! }), thinking: t as ThinkingLevel, ...(value?.fast ? { fast: true } : {}) })}
+              options={thinkingOptions.map((t) => ({ value: t, label: thinkingLabel(t) }))}
+            />
+          )}
+          {efforts.length > 1 && (
+            <LevelSubmenu
+              label="档位"
+              value={variant?.effort ?? ""}
+              onChange={(e) => toVariant({ effort: e || undefined })}
+              options={efforts.map((e) => ({ value: e ?? "", label: e ? thinkingLabel(e) : "默认" }))}
+            />
           )}
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => setPicking(true)}>换模型…</DropdownMenuItem>

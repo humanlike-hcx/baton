@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { post } from "@/lib/api";
-import { ACCESS } from "@/lib/format";
 import { chatContext, chatCost, findModel, lastModel, pickBody, rememberModel, toChatModel, usableModels, useModels } from "@/lib/models";
 import { chooseProjectDirectory, useSwitchProject } from "@/lib/projects";
 import { href, navigate } from "@/lib/router";
@@ -31,7 +30,8 @@ export function NewChat() {
   const usable = remembered && !remembered.route.unavailable ? remembered : undefined;
   const fallback = usable ?? usableModels(routes, demo)[0];
   const thinking = usable && last?.thinking && usable.option.thinking?.includes(last.thinking) ? last.thinking : undefined;
-  const model = picked ?? (fallback ? { ...toChatModel(fallback), ...(thinking ? { thinking } : {}) } : undefined);
+  const fast = usable && last?.fast && usable.option.fastMode ? true : undefined;
+  const model = picked ?? (fallback ? { ...toChatModel(fallback), ...(thinking ? { thinking } : {}), ...(fast ? { fast } : {}) } : undefined);
 
   const send = async () => {
     if (!text.trim() || !model || sending) return;
@@ -121,7 +121,6 @@ export function NewChat() {
                 </SelectContent>
               </Select>
             }
-            footerLeft={<span className="truncate">{ACCESS.find((a) => a.value === access)?.hint}。Enter 发送，Shift + Enter 换行</span>}
             cost={chatCost(undefined, model)}
             context={chatContext(model, findModel(routes, model)?.option)}
           />

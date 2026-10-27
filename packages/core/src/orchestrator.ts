@@ -78,13 +78,14 @@ export function runAgent(model: ChatModel, permissions: RunAgent["permissions"])
     provider,
     model: model.model,
     thinking: model.thinking,
+    fast: model.fast,
     permissions,
   };
 }
 
-/** Same account, model and thinking level. */
+/** Same account, model, thinking level and fast tier. */
 export function sameChatModel(a: ChatModel | undefined, b: ChatModel | undefined): boolean {
-  return Boolean(a && b && a.source === b.source && a.model === b.model && (a.provider ?? "") === (b.provider ?? "") && (a.thinking ?? "") === (b.thinking ?? ""));
+  return Boolean(a && b && a.source === b.source && a.model === b.model && (a.provider ?? "") === (b.provider ?? "") && (a.thinking ?? "") === (b.thinking ?? "") && Boolean(a.fast) === Boolean(b.fast));
 }
 
 export class Orchestrator {
@@ -258,9 +259,13 @@ export class Orchestrator {
   private switchModel(thread: Thread, model: ChatModel | undefined): void {
     if (!model || sameChatModel(model, thread.model)) return;
     const before = thread.model;
-    if (before && sameChatModel({ ...model, thinking: before.thinking }, before)) {
+    const sameModel = Boolean(before && before.source === model.source && before.model === model.model && (before.provider ?? "") === (model.provider ?? ""));
+    if (before && sameModel) {
       thread.model = model;
-      this.push(thread, { kind: "notice", level: "info", text: `思考档位从「${thinkingLabel(before.thinking)}」改成「${thinkingLabel(model.thinking)}」。` }, false);
+      const notes: string[] = [];
+      if ((before.thinking ?? "") !== (model.thinking ?? "")) notes.push(`思考档位从「${thinkingLabel(before.thinking)}」改成「${thinkingLabel(model.thinking)}」。`);
+      if (Boolean(before.fast) !== Boolean(model.fast)) notes.push(model.fast ? "快速已打开。" : "快速已关闭。");
+      if (notes.length) this.push(thread, { kind: "notice", level: "info", text: notes.join("") }, false);
       return;
     }
     const previous = thread.model ? runAgent(thread.model, REVIEW_PERMISSIONS).name : undefined;
@@ -438,6 +443,7 @@ export class Orchestrator {
       model: agent.model,
       family: modelFamily(agent.model, agent.provider),
       thinking: agent.thinking,
+      fast: agent.fast || undefined,
       role,
       status: "running",
       startedAt: nowIso(),
