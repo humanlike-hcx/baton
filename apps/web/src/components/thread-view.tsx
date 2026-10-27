@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowUp, ClipboardCheck, CircleStop, FileDiff, Hash, Loader2, PanelRight, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowUp, ClipboardCheck, CircleStop, FileDiff, FolderOpen, Hash, Loader2, PanelRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { familyLabel } from "@baton/core/families";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { del, post } from "@/lib/api";
 import { ACCESS_LABEL, ROLE_LABEL, SOURCE_LABEL, STATUS_LABEL, STATUS_TONE, kb, tokens } from "@/lib/format";
 import { findModel, rememberModel, sameModel, toChatModel, usableModels, useModels } from "@/lib/models";
+import { projectOfThread, useSwitchProject } from "@/lib/projects";
 import { navigate } from "@/lib/router";
 import { useBaton, useThread } from "@/lib/store";
 import type { ChatAccess, ChatModel, Thread } from "@/lib/types";
@@ -169,6 +170,14 @@ function composerHint(thread: Thread): string {
 
 export function ThreadView({ threadId }: { threadId: string }) {
   const { thread, error, loading } = useThread(threadId);
+  const { state } = useBaton();
+  const project = projectOfThread(state, threadId);
+  const projectRoot = project?.root;
+  const switchProject = useSwitchProject();
+  // The management pages and the model list follow the project of the chat being viewed.
+  useEffect(() => {
+    if (projectRoot) switchProject(projectRoot).catch((e: Error) => toast.error(e.message));
+  }, [projectRoot, switchProject]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [picked, setPicked] = useState<ChatModel>();
@@ -273,6 +282,12 @@ export function ThreadView({ threadId }: { threadId: string }) {
                 {thread.model && (
                   <span className="text-xs text-muted-foreground">
                     {thread.model.name} · {SOURCE_LABEL[thread.model.source]}
+                  </span>
+                )}
+                {project && (
+                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" title={project.root}>
+                    <FolderOpen className="size-3.5" />
+                    {project.name}
                   </span>
                 )}
               </div>

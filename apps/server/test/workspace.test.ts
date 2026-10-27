@@ -131,33 +131,17 @@ describe("HTTP API: workspaces (US-75)", () => {
 
     await s.post("/api/workspace/open", { path: second, create: true });
     let state = await s.get("/api/state");
+    const roots = () => state.projects.map((p: { root: string }) => p.root);
     expect(state.workspace.root).toBe(fs.realpathSync(second));
-    expect(state.recent).toEqual([fs.realpathSync(second), first]);
+    expect(roots()).toEqual([fs.realpathSync(second), first]);
     expect(fs.existsSync(path.join(second, ".baton/rules/role-chat.md"))).toBe(true);
     expect(await s.get("/api/threads")).toEqual([]);
 
     await s.post("/api/workspace/open", { path: first });
     state = await s.get("/api/state");
     expect(state.workspace.root).toBe(first);
-    expect(state.recent[0]).toBe(first);
+    expect(roots()).toEqual([fs.realpathSync(second), first]);
     expect((await s.request("POST", "/api/workspace/open", { path: "  " })).status).toBe(400);
-  });
-
-  it("refuses to switch while a run is in progress", async () => {
-    const s = await testServer({ autoApprove: false });
-    const other = tempDir("baton-ws3-");
-    const a = await s.chat("写文件：notes/busy.md", { access: "ask" });
-    await s.waitForThread(a.id, (t) => t.items.some((i) => i.kind === "approval" && i.status === "pending"), "command approval");
-
-    const busy = await s.request("POST", "/api/workspace/open", { path: other });
-    expect(busy.status).toBe(400);
-    expect(busy.body.error).toContain("先取消再切换");
-    expect((await s.get("/api/state")).workspace.root).toBe(fs.realpathSync(s.root));
-
-    await s.post(`/api/threads/${a.id}/cancel`);
-    await s.settled(a.id);
-    await s.post("/api/workspace/open", { path: other });
-    expect((await s.get("/api/state")).workspace.root).toBe(fs.realpathSync(other));
   });
 });
 

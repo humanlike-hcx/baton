@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
-import { CheckCircle2, Circle } from "lucide-react";
+import { CheckCircle2, Circle, FolderOpen } from "lucide-react";
 import { toast } from "sonner";
+import { useBaton } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 export function Section({ title, description, children, status }: { title: string; description?: ReactNode; children: ReactNode; status?: ReactNode }) {
@@ -15,6 +16,18 @@ export function Section({ title, description, children, status }: { title: strin
       </div>
       <div className="mt-4">{children}</div>
     </section>
+  );
+}
+
+/** Which project a management page is showing. */
+export function ProjectChip() {
+  const { state } = useBaton();
+  if (!state) return null;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-normal text-muted-foreground" title={state.workspace.root}>
+      <FolderOpen className="size-3.5" />
+      {state.workspace.name}
+    </span>
   );
 }
 

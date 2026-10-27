@@ -14,7 +14,7 @@ import { kb } from "@/lib/format";
 import { navigate } from "@/lib/router";
 import { useBaton } from "@/lib/store";
 import type { CheckResult, WorkspaceSettings } from "@/lib/types";
-import { Section, useBusy } from "./section";
+import { ProjectChip, Section, useBusy } from "./section";
 
 function errorToast(e: unknown) {
   toast.error((e as Error).message);
@@ -31,20 +31,60 @@ function WorkspaceTab() {
       await post("/api/workspace/open", { path, create });
       await refresh();
       setTarget("");
-      toast.success("已切换工作区");
       navigate({ page: "threads" });
+    });
+  const remove = (root: string) =>
+    run(`remove:${root}`, async () => {
+      await post("/api/workspace/close", { path: root });
+      await refresh();
+      toast.success("已从列表移除，目录里的文件和对话记录都还在");
     });
 
   return (
     <div className="space-y-4">
-      <Section title="当前工作区" description="所有对话里的模型在这个目录里读写同一批文件。工作台的状态保存在其中的 .baton/ 目录。">
-        <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2">
-          <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate font-mono text-xs">{state.workspace.root}</span>
-          {state.workspace.demo && <Badge variant="secondary">演示</Badge>}
+      <Section
+        title="项目"
+        description="每个对话属于一个项目，模型在项目目录里读写文件，上下文、记忆、规则和检查命令也按项目分开，保存在项目的 .baton/ 目录。不同项目的对话可以同时在跑。这里和下面几个分页显示的是当前项目。"
+      >
+        <div className="space-y-1">
+          {state.projects.map((p) => {
+            const current = p.root === state.workspace.root;
+            const running = p.threads.filter((t) => t.status === "running" || t.status === "waiting").length;
+            return (
+              <div key={p.root} className={cn("flex items-center gap-2 rounded-lg border px-3 py-2", current ? "bg-muted/60" : "bg-background")}>
+                <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 text-sm font-medium">
+                    <span className="truncate">{p.name}</span>
+                    {p.demo && <Badge variant="secondary">演示</Badge>}
+                    {current && <Badge variant="outline">当前</Badge>}
+                  </div>
+                  <div className="truncate font-mono text-xs text-muted-foreground">{p.root}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {p.threads.length} 个对话{running > 0 && `，${running} 个在进行`}
+                  </div>
+                </div>
+                {!current && (
+                  <Button size="sm" variant="outline" disabled={!!busy} onClick={() => open(p.root)}>
+                    {busy === p.root && <Loader2 className="animate-spin" />}切换
+                  </Button>
+                )}
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  disabled={!!busy || state.projects.length < 2 || running > 0}
+                  title={running > 0 ? "有对话在进行，先取消再移除" : state.projects.length < 2 ? "至少要留一个项目" : "从列表移除（不删除文件）"}
+                  aria-label={`从列表移除 ${p.name}`}
+                  onClick={() => remove(p.root)}
+                >
+                  {busy === `remove:${p.root}` ? <Loader2 className="animate-spin" /> : <X />}
+                </Button>
+              </div>
+            );
+          })}
         </div>
       </Section>
-      <Section title="打开其他目录" description="填本机上的绝对路径，比如你的项目仓库。第一次打开会初始化 .baton/、CONTEXT.md、AGENTS.md 里的工作台段落和 .cursor/mcp.json。">
+      <Section title="打开或新建项目" description="填本机上的绝对路径，比如你的项目仓库。第一次打开会初始化 .baton/、CONTEXT.md、AGENTS.md 里的工作台段落和 .cursor/mcp.json。">
         <div className="flex flex-col gap-2 sm:flex-row">
           <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="~/code/my-project" className="font-mono text-xs" />
           <div className="flex gap-2">
@@ -56,19 +96,6 @@ function WorkspaceTab() {
             </Button>
           </div>
         </div>
-        {state.recent.filter((r) => r !== state.workspace.root).length > 0 && (
-          <div className="mt-4 space-y-1">
-            <div className="text-xs font-medium text-muted-foreground">最近打开</div>
-            {state.recent
-              .filter((r) => r !== state.workspace.root)
-              .map((r) => (
-                <button key={r} type="button" disabled={!!busy} onClick={() => open(r)} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left font-mono text-xs hover:bg-muted">
-                  {busy === r ? <Loader2 className="size-3.5 animate-spin" /> : <FolderOpen className="size-3.5 text-muted-foreground" />}
-                  <span className="truncate">{r}</span>
-                </button>
-              ))}
-          </div>
-        )}
       </Section>
     </div>
   );
@@ -270,7 +297,7 @@ function PermissionsTab() {
 }
 
 const TABS = [
-  { value: "workspace", label: "工作区" },
+  { value: "workspace", label: "项目" },
   { value: "checks", label: "检查命令" },
   { value: "budgets", label: "上下文预算" },
   { value: "permissions", label: "权限" },
@@ -282,7 +309,9 @@ export function SettingsPage({ tab }: { tab?: string }) {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
-        <h1 className="text-xl font-semibold">设置</h1>
+        <h1 className="flex items-center gap-2 text-xl font-semibold">
+          设置 <ProjectChip />
+        </h1>
         {error && !state && <p className="mt-4 text-sm text-destructive">{error}</p>}
         <Tabs value={active} onValueChange={(v) => navigate({ page: "settings", tab: v })} className="mt-6">
           <div className="overflow-x-auto">

@@ -29,9 +29,18 @@ export interface ThreadSummary {
   model?: ChatModel;
 }
 
+/** An open workspace in the sidebar, with its chats. */
+export interface Project {
+  root: string;
+  name: string;
+  demo: boolean;
+  threads: ThreadSummary[];
+}
+
 export interface AppStateResponse {
+  /** The current project: what the management pages show and where a new chat opens. */
   workspace: { root: string; name: string; demo: boolean };
-  recent: string[];
+  projects: Project[];
   auth: AuthStatus;
   settings: WorkspaceSettings;
   threads: ThreadSummary[];

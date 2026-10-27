@@ -126,6 +126,19 @@ export class Orchestrator {
     return this.active.size > 0;
   }
 
+  /** Whether a run in progress here was handed `token` for the MCP server and `baton` CLI. */
+  ownsToken(token: string): boolean {
+    return [...this.active.values()].some((a) => a.token === token);
+  }
+
+  cursorRunCount(): number {
+    return [...this.active.values()].filter((a) => a.runtime === "cursor").length;
+  }
+
+  hasApproval(approvalId: string): boolean {
+    return this.approvals.has(approvalId);
+  }
+
   // ---------- persistence & events ----------
 
   private save(thread: Thread, immediate = true): void {
@@ -589,11 +602,11 @@ export class Orchestrator {
   }
 
   /** Tool calls from the MCP server or the `baton` CLI. */
-  async bridgeTool(token: string | undefined, toolName: string, args: unknown): Promise<ToolOutput> {
+  async bridgeTool(token: string | undefined, toolName: string, args: unknown, options: { guessCursorRun?: boolean } = {}): Promise<ToolOutput> {
     const tool = MCP_TOOLS.find((t) => t.name === toolName);
     if (!tool) return { text: `未知工具：${toolName}`, isError: true };
     let active = token ? [...this.active.values()].find((a) => a.token === token) : undefined;
-    if (!active && !token) {
+    if (!active && !token && options.guessCursorRun !== false) {
       const cursorRuns = [...this.active.values()].filter((a) => a.runtime === "cursor");
       if (cursorRuns.length === 1) active = cursorRuns[0];
     }

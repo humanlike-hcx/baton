@@ -22,7 +22,7 @@ import {
 } from "@baton/core";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { MOCK_CURSOR, REPO_ROOT, WEB_DIST, nodeScriptCommand, type AppState } from "./state.ts";
+import { MOCK_CURSOR, REPO_ROOT, WEB_DIST, nodeScriptCommand, type AppState, type Session } from "./state.ts";
 
 const ALLOWED_HOSTS = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 const ALLOWED_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
@@ -77,7 +77,7 @@ export function createApp(state: AppState): Hono {
     const ws = state.ws;
     return c.json({
       workspace: { root: ws.root, name: ws.settings().name, demo: state.demo },
-      recent: state.recent(),
+      projects: state.projects().map((s) => ({ root: s.ws.root, name: s.ws.settings().name, demo: s.demo, threads: s.orchestrator.listThreads().map(threadSummary) })),
       auth: state.authStatus(),
       settings: ws.settings(),
       threads: state.orchestrator.listThreads().map(threadSummary),
@@ -95,7 +95,16 @@ export function createApp(state: AppState): Hono {
     } catch (error) {
       bad((error as Error).message);
     }
-    await state.refreshAuth(true);
+    await state.refreshAuth();
+    return c.json({ ok: true });
+  });
+  app.post("/api/workspace/close", async (c) => {
+    const { path: root } = await body<{ path: string }>(c);
+    try {
+      state.closeWorkspace(root ?? "");
+    } catch (error) {
+      bad((error as Error).message);
+    }
     return c.json({ ok: true });
   });
 
@@ -213,53 +222,62 @@ export function createApp(state: AppState): Hono {
   app.get("/api/briefing", async (c) => {
     const role = (c.req.query("role") ?? "chat") as Role;
     if (role !== "chat" && role !== "review") bad("role 只能是 chat 或 review");
-    const model = await state.resolveModel(c.req.query("source") ?? "", c.req.query("model") ?? "").catch((e: Error) => bad(e.message));
-    return c.json(await state.orchestrator.briefingPreview(model, role, c.req.query("thread") || undefined));
+    const threadId = c.req.query("thread") || undefined;
+    const session = (threadId && state.sessionOfThread(threadId)) || state.sessionByRoot(state.ws.root)!;
+    const model = await state.resolveModel(c.req.query("source") ?? "", c.req.query("model") ?? "", session).catch((e: Error) => bad(e.message));
+    return c.json(await session.orchestrator.briefingPreview(model, role, threadId));
   });
 
   app.get("/api/stats", (c) => c.json(state.orchestrator.stats()));
 
   // ---------- threads ----------
+  // A chat, approval or run belongs to one project; these routes find it there, whichever project is current.
+
+  const threadOr404 = (id: string): { session: Session; thread: Thread } => {
+    const session = state.sessionOfThread(id);
+    const thread = session?.orchestrator.getThread(id);
+    if (!session || !thread) throw new HTTPException(404, { message: "找不到对话" });
+    return { session, thread };
+  };
+  const sessionOfRun = (id: string): Session => {
+    const session = state.sessionOfRun(id);
+    if (!session) throw new HTTPException(404, { message: "找不到这次运行" });
+    return session;
+  };
 
   app.get("/api/threads", (c) => c.json(state.orchestrator.listThreads().map(threadSummary)));
   app.post("/api/threads", async (c) => {
-    const input = await body<{ title?: string; task?: string; source?: string; model?: string }>(c);
-    const model = await state.resolveModel(input.source ?? "", input.model ?? "").catch((e: Error) => bad(e.message));
-    return c.json(state.orchestrator.createThread({ title: input.title, task: input.task ?? "", model }));
+    const input = await body<{ title?: string; task?: string; source?: string; model?: string; workspace?: string }>(c);
+    const session = input.workspace ? state.sessionByRoot(input.workspace) : state.sessionByRoot(state.ws.root);
+    if (!session) bad("这个项目没有打开，请先在左边的项目列表里打开它");
+    const model = await state.resolveModel(input.source ?? "", input.model ?? "", session).catch((e: Error) => bad(e.message));
+    return c.json(session.orchestrator.createThread({ title: input.title, task: input.task ?? "", model }));
   });
-  app.get("/api/threads/:id", (c) => {
-    const thread = state.orchestrator.getThread(c.req.param("id"));
-    if (!thread) throw new HTTPException(404, { message: "找不到对话" });
-    return c.json(thread);
-  });
+  app.get("/api/threads/:id", (c) => c.json(threadOr404(c.req.param("id")).thread));
   app.delete("/api/threads/:id", (c) => {
+    const { session, thread } = threadOr404(c.req.param("id"));
     try {
-      state.orchestrator.deleteThread(c.req.param("id"));
+      session.orchestrator.deleteThread(thread.id);
     } catch (error) {
       bad((error as Error).message);
     }
     return c.json({ ok: true });
   });
-  const threadOr404 = (id: string) => {
-    const thread = state.orchestrator.getThread(id);
-    if (!thread) throw new HTTPException(404, { message: "找不到对话" });
-    return thread;
-  };
   app.post("/api/threads/:id/messages", async (c) => {
     const { text, source, model } = await body<{ text: string; source?: string; model?: string }>(c);
     if (!text?.trim()) bad("消息不能为空");
-    const thread = threadOr404(c.req.param("id"));
-    const picked = source || model ? await state.resolveModel(source ?? "", model ?? "").catch((e: Error) => bad(e.message)) : undefined;
+    const { session, thread } = threadOr404(c.req.param("id"));
+    const picked = source || model ? await state.resolveModel(source ?? "", model ?? "", session).catch((e: Error) => bad(e.message)) : undefined;
     if (!picked && !thread.model) bad("请先选择一个模型");
-    state.orchestrator.postMessage(thread.id, text, picked);
+    session.orchestrator.postMessage(thread.id, text, picked);
     return c.json({ ok: true });
   });
   app.post("/api/threads/:id/access", async (c) => {
     const { access } = await body<{ access: ChatAccess }>(c);
     if (!CHAT_ACCESS.includes(access)) bad("权限只能是 read、ask 或 allow");
-    const thread = threadOr404(c.req.param("id"));
+    const { session, thread } = threadOr404(c.req.param("id"));
     try {
-      state.orchestrator.setAccess(thread.id, access);
+      session.orchestrator.setAccess(thread.id, access);
     } catch (error) {
       bad((error as Error).message);
     }
@@ -267,31 +285,30 @@ export function createApp(state: AppState): Hono {
   });
   app.post("/api/threads/:id/review", async (c) => {
     const { source, model } = await body<{ source?: string; model?: string }>(c);
-    const thread = threadOr404(c.req.param("id"));
-    const reviewer = await state.resolveModel(source ?? "", model ?? "").catch((e: Error) => bad(e.message));
+    const { session, thread } = threadOr404(c.req.param("id"));
+    const reviewer = await state.resolveModel(source ?? "", model ?? "", session).catch((e: Error) => bad(e.message));
     try {
-      state.orchestrator.checkReview(thread.id, reviewer);
+      session.orchestrator.checkReview(thread.id, reviewer);
     } catch (error) {
       bad((error as Error).message);
     }
-    void state.orchestrator.review(thread.id, reviewer).catch((error: Error) => console.error("[baton] review failed:", error));
+    void session.orchestrator.review(thread.id, reviewer).catch((error: Error) => console.error("[baton] review failed:", error));
     return c.json({ ok: true }, 202);
   });
   app.post("/api/threads/:id/cancel", (c) => {
-    state.orchestrator.cancel(c.req.param("id"));
+    const { session, thread } = threadOr404(c.req.param("id"));
+    session.orchestrator.cancel(thread.id);
     return c.json({ ok: true });
   });
   app.post("/api/approvals/:id", async (c) => {
     const { allow } = await body<{ allow: boolean }>(c);
-    try {
-      state.orchestrator.respondApproval(c.req.param("id"), Boolean(allow));
-    } catch (error) {
-      bad((error as Error).message);
-    }
+    const session = state.sessionOfApproval(c.req.param("id"));
+    if (!session) bad("这个审批已经处理过或已超时");
+    session.orchestrator.respondApproval(c.req.param("id"), Boolean(allow));
     return c.json({ ok: true });
   });
-  app.get("/api/runs/:id/diff", async (c) => c.json({ diff: await state.orchestrator.runDiff(c.req.param("id")) }));
-  app.post("/api/runs/:id/rollback", async (c) => c.json({ files: await state.orchestrator.rollback(c.req.param("id")) }));
+  app.get("/api/runs/:id/diff", async (c) => c.json({ diff: await sessionOfRun(c.req.param("id")).orchestrator.runDiff(c.req.param("id")) }));
+  app.post("/api/runs/:id/rollback", async (c) => c.json({ files: await sessionOfRun(c.req.param("id")).orchestrator.rollback(c.req.param("id")) }));
 
   // ---------- auth ----------
 
@@ -333,7 +350,7 @@ export function createApp(state: AppState): Hono {
   app.post("/api/bridge/tool", async (c) => {
     const { tool, args } = await body<{ tool: string; args?: unknown }>(c);
     const token = c.req.header("x-baton-token") || undefined;
-    const out = await state.orchestrator.bridgeTool(token, tool, args ?? {});
+    const out = await state.bridgeTool(token, tool, args ?? {});
     return c.json(out, out.isError ? 422 : 200);
   });
 

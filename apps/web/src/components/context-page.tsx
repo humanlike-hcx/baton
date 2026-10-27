@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, Pin, PinOff, Plus, Search, Sparkles, Undo2 } from "lucide-react";
+import { ProjectChip } from "./section";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -482,8 +483,10 @@ export function ContextPage({ tab }: { tab?: string }) {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
-        <h1 className="text-xl font-semibold">上下文与记忆</h1>
-        <p className="mt-1 text-sm text-muted-foreground">所有模型共享的这一套：它们读同一份上下文、写同一份记忆，在同一个工作区里改同一批文件。</p>
+        <h1 className="flex items-center gap-2 text-xl font-semibold">
+          上下文与记忆 <ProjectChip />
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">这个项目里所有模型共享的这一套：它们读同一份上下文、写同一份记忆，在同一个目录里改同一批文件。其他项目各有自己的一套。</p>
         <Tabs value={active} onValueChange={(v) => navigate({ page: "context", tab: v })} className="mt-6">
           <TabsList>
             {TABS.map((t) => (

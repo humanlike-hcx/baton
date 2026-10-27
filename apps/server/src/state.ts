@@ -55,6 +55,14 @@ interface Persisted {
 
 type Broadcast = (message: unknown) => void;
 
+/** One open workspace: its own orchestrator (write lock, snapshots, approvals) and context tidier. */
+export interface Session {
+  ws: Workspace;
+  orchestrator: Orchestrator;
+  tidier: ContextTidier;
+  demo: boolean;
+}
+
 interface ChatGptLogin {
   method: ChatGptMethod;
   url?: string;
@@ -93,15 +101,15 @@ export class AppState {
   readonly credentials: FileCredentialStore;
   readonly pi: PiExecutor;
   readonly acp = new AcpExecutor();
-  orchestrator!: Orchestrator;
-  tidier!: ContextTidier;
-  demo = false;
+  private sessions = new Map<string, Session>();
+  private current!: Session;
   private persisted: Persisted;
   private auth: { chatgpt?: ChatGptMethod; deepseek: boolean } = { deepseek: false };
   private chatgptError?: string;
-  private cursor: CursorStatus = { installed: false, loggedIn: false };
+  /** Each project names its own Cursor CLI command, so sign-in state and models are kept per command. */
+  private cursorByCommand = new Map<string, CursorStatus>();
   private cursorCheckedAt = 0;
-  private cursorModelsCache?: { at: number; command: string; models: CursorModel[]; error?: string };
+  private cursorModelsCache = new Map<string, { at: number; models: CursorModel[]; error?: string }>();
   private chatgptLogin?: ChatGptLogin;
   private cursorLoginFlow?: { url?: string; cancel: () => void };
   private clients = new Set<Broadcast>();
@@ -115,8 +123,56 @@ export class AppState {
     this.persisted = readJson<Persisted>(path.join(this.home, "state.json"), { recent: [] });
   }
 
+  /** The current project: what the management pages show and where a new chat opens by default. */
   get ws(): Workspace {
-    return this.orchestrator.ws;
+    return this.current.ws;
+  }
+
+  get orchestrator(): Orchestrator {
+    return this.current.orchestrator;
+  }
+
+  get tidier(): ContextTidier {
+    return this.current.tidier;
+  }
+
+  get demo(): boolean {
+    return this.current.demo;
+  }
+
+  /** Open projects in sidebar order. */
+  projects(): Session[] {
+    return this.persisted.recent.map((root) => this.sessions.get(root)).filter((s): s is Session => Boolean(s));
+  }
+
+  sessionByRoot(root: string): Session | undefined {
+    return this.sessions.get(root);
+  }
+
+  sessionOfThread(threadId: string): Session | undefined {
+    return [...this.sessions.values()].find((s) => s.orchestrator.getThread(threadId));
+  }
+
+  sessionOfRun(runId: string): Session | undefined {
+    return [...this.sessions.values()].find((s) => s.orchestrator.findRun(runId));
+  }
+
+  sessionOfApproval(approvalId: string): Session | undefined {
+    return [...this.sessions.values()].find((s) => s.orchestrator.hasApproval(approvalId));
+  }
+
+  /** Tool calls from the MCP server or `baton` CLI go to the project whose run holds the token. */
+  bridgeTool(token: string | undefined, tool: string, args: unknown) {
+    const sessions = [...this.sessions.values()];
+    if (token) return (sessions.find((s) => s.orchestrator.ownsToken(token)) ?? this.current).orchestrator.bridgeTool(token, tool, args);
+    // Without a token, only an unambiguous single Cursor run (across every project) may be guessed.
+    const cursor = sessions.filter((s) => s.orchestrator.cursorRunCount() > 0);
+    const single = cursor.length === 1 && cursor[0]!.orchestrator.cursorRunCount() === 1 ? cursor[0] : undefined;
+    return (single ?? this.current).orchestrator.bridgeTool(undefined, tool, args, { guessCursorRun: Boolean(single) });
+  }
+
+  async stopAll(): Promise<void> {
+    await Promise.all([...this.sessions.values()].map((s) => s.orchestrator.stopAll()));
   }
 
   subscribe(send: Broadcast): () => void {
@@ -139,42 +195,83 @@ export class AppState {
     const target = envWs ? path.resolve(envWs) : this.persisted.lastWorkspace && fs.existsSync(this.persisted.lastWorkspace) ? this.persisted.lastWorkspace : demoDir;
     if (target === demoDir) fs.mkdirSync(demoDir, { recursive: true });
     this.openWorkspace(target, { demo: this.options.demo ?? (this.isDemoDir(target) || process.env.BATON_DEMO === "1") });
+    // Every project in the sidebar is live, so its chats can be opened and keep running without switching to it.
+    for (const root of this.persisted.recent) {
+      if (this.sessions.has(root) || !fs.existsSync(root)) continue;
+      try {
+        this.sessions.set(root, this.createSession(root, this.isDemoDir(root)));
+      } catch (error) {
+        console.error(`[baton] could not open ${root}:`, (error as Error).message);
+      }
+    }
     await this.refreshAuth(true);
   }
 
+  /** Makes `root` the current project, opening it first if needed; chats in other projects keep running. */
   openWorkspace(root: string, options: { demo?: boolean; create?: boolean } = {}): void {
-    if (this.orchestrator?.isBusy()) throw new Error("当前工作区有运行在进行，先取消再切换");
     const resolved = path.resolve(root);
     if (!fs.existsSync(resolved)) {
       if (!options.create) throw new Error(`目录不存在：${resolved}`);
       fs.mkdirSync(resolved, { recursive: true });
     }
     if (!fs.statSync(resolved).isDirectory()) throw new Error(`不是目录：${resolved}`);
-    const demo = options.demo ?? this.isDemoDir(resolved);
-    const ws = Workspace.open(resolved, { demo });
+    let session = this.sessions.get(fs.realpathSync(resolved));
+    if (!session) {
+      session = this.createSession(resolved, options.demo ?? this.isDemoDir(resolved));
+      this.sessions.set(session.ws.root, session);
+    }
+    this.current = session;
+    const opened = session.ws.root;
+    this.persisted.lastWorkspace = opened;
+    // Sidebar order stays put when switching; a newly opened project goes on top.
+    if (!this.persisted.recent.includes(opened)) this.persisted.recent = [opened, ...this.persisted.recent].slice(0, 12);
+    this.savePersisted();
+    this.broadcast({ type: "state" });
+  }
+
+  /** Takes a project off the list (files untouched); the current one hands over to the next project. */
+  closeWorkspace(root: string): void {
+    const session = this.sessions.get(root);
+    if (!session) throw new Error("这个项目不在列表里");
+    if (session.orchestrator.isBusy()) throw new Error("这个项目里有对话在回复，先取消再移除");
+    const rest = this.projects().filter((s) => s !== session);
+    if (session === this.current) {
+      if (!rest.length) throw new Error("至少要留一个项目");
+      this.current = rest[0]!;
+      this.persisted.lastWorkspace = this.current.ws.root;
+    }
+    this.sessions.delete(root);
+    this.persisted.recent = this.persisted.recent.filter((r) => r !== root);
+    this.savePersisted();
+    this.broadcast({ type: "state" });
+  }
+
+  private savePersisted(): void {
+    writeFileAtomic(path.join(this.home, "state.json"), JSON.stringify(this.persisted, null, 2));
+  }
+
+  private createSession(root: string, demo: boolean): Session {
+    const ws = Workspace.open(root, { demo });
     if (this.options.cursorCommand && ws.settings().cursor.command !== this.options.cursorCommand) {
       ws.saveSettings({ ...ws.settings(), cursor: { command: this.options.cursorCommand } });
     }
     ws.ensureCursorMcp({ command: process.execPath, args: [MCP_BIN], env: { ...NODE_ENV_VARS, BATON_URL: this.baseUrl } });
-    this.demo = demo;
-    this.orchestrator = new Orchestrator({
+    const orchestrator: Orchestrator = new Orchestrator({
       ws,
       pi: this.pi,
       acp: this.acp,
-      unavailable: (model) => this.unavailable(model.source),
-      onEvent: (event: OrchestratorEvent) => this.broadcast(event),
+      unavailable: (model) => this.unavailable(model.source, session),
+      onEvent: (event: OrchestratorEvent) => this.broadcast({ ...event, workspace: ws.root }),
       mcpLaunch: (token) => ({ command: process.execPath, args: [MCP_BIN], env: { ...NODE_ENV_VARS, BATON_URL: this.baseUrl, BATON_TOKEN: token } }),
     });
-    this.tidier = new ContextTidier(ws, {
-      model: () => this.tidyModel(),
-      unavailableReason: () => "整理员用 DeepSeek，请先到「设置 → 账号」里填 DeepSeek API key",
-      onChange: () => this.broadcast({ type: "tidy" }),
+    const tidier = new ContextTidier(ws, {
+      model: () => this.tidyModel(demo),
+      unavailableReason: () => "整理员用 DeepSeek，请先到「模型」页填写 DeepSeek API key",
+      onChange: () => this.broadcast({ type: "tidy", workspace: ws.root }),
     });
-    ws.onContextWrite = () => this.tidier.maybeAuto();
-    this.persisted.lastWorkspace = ws.root;
-    this.persisted.recent = [ws.root, ...this.persisted.recent.filter((r) => r !== ws.root)].slice(0, 8);
-    writeFileAtomic(path.join(this.home, "state.json"), JSON.stringify(this.persisted, null, 2));
-    this.broadcast({ type: "state" });
+    ws.onContextWrite = () => tidier.maybeAuto();
+    const session: Session = { ws, orchestrator, tidier, demo };
+    return session;
   }
 
   /** Workspaces are remembered by real path, so compare real paths (macOS's /tmp is a link to /private/tmp). */
@@ -184,35 +281,40 @@ export class AppState {
     return fs.realpathSync(dir) === fs.realpathSync(demoDir);
   }
 
-  recent(): string[] {
-    return this.persisted.recent.filter((r) => fs.existsSync(r));
-  }
-
   // ---------- auth ----------
 
-  /** Why a route can't run right now, with where to fix it; undefined when it can. */
-  unavailable(source: CredentialSource): string | undefined {
+  /** Why a route can't run right now for a chat in `session`, with where to fix it; undefined when it can. */
+  unavailable(source: CredentialSource, session: Session = this.current): string | undefined {
     switch (source) {
       case "demo":
-        return this.demo ? undefined : "演示模型只在演示工作区里可用";
+        return session.demo ? undefined : "演示模型只在演示工作区里可用";
       case "chatgpt":
         return this.auth.chatgpt ? undefined : "还没有用 ChatGPT 登录，请到「模型」页登录";
       case "deepseek":
         return this.auth.deepseek ? undefined : "还没有配置 DeepSeek API key，请到「模型」页填写";
-      case "cursor":
-        return this.cursor.loggedIn ? undefined : this.cursor.installed ? "Cursor 还没有登录，请到「模型」页登录" : "没有找到 Cursor CLI，请到「模型」页查看安装方法";
+      case "cursor": {
+        const cursor = this.cursorStatusOf(session);
+        return cursor.loggedIn ? undefined : cursor.installed ? "Cursor 还没有登录，请到「模型」页登录" : "没有找到 Cursor CLI，请到「模型」页查看安装方法";
+      }
       default:
         return "不支持的账号来源";
     }
+  }
+
+  private cursorStatusOf(session: Session): CursorStatus {
+    return this.cursorByCommand.get(session.ws.settings().cursor.command) ?? { installed: false, loggedIn: false };
   }
 
   async refreshAuth(includeCursor = false): Promise<void> {
     const deepseek = await this.credentials.read("deepseek");
     this.auth.chatgpt = await chatgptMethod(this.credentials);
     this.auth.deepseek = deepseek?.type === "api_key" && Boolean(deepseek.key);
-    if (includeCursor || Date.now() - this.cursorCheckedAt > 60_000) {
+    const currentCommand = this.ws.settings().cursor.command;
+    if (includeCursor || Date.now() - this.cursorCheckedAt > 60_000 || !this.cursorByCommand.has(currentCommand)) {
       this.cursorCheckedAt = Date.now();
-      this.cursor = await cursorStatus(this.ws.settings().cursor.command);
+      const commands = new Set([currentCommand, ...[...this.sessions.values()].map((s) => s.ws.settings().cursor.command)]);
+      const statuses = await Promise.all([...commands].map(async (command) => [command, await cursorStatus(command)] as const));
+      this.cursorByCommand = new Map(statuses);
     }
   }
 
@@ -225,7 +327,7 @@ export class AppState {
         error: this.chatgptError,
       },
       deepseek: { configured: this.auth.deepseek },
-      cursor: { ...this.cursor, pending: this.cursorLoginFlow?.url ? { url: this.cursorLoginFlow.url } : undefined },
+      cursor: { ...this.cursorStatusOf(this.current), pending: this.cursorLoginFlow?.url ? { url: this.cursorLoginFlow.url } : undefined },
     };
   }
 
@@ -328,12 +430,12 @@ export class AppState {
     return flow.url;
   }
 
-  async listCursorModels(force = false): Promise<{ models: CursorModel[]; error?: string }> {
-    const command = this.ws.settings().cursor.command;
-    const cached = this.cursorModelsCache;
-    if (!force && cached && cached.command === command && Date.now() - cached.at < 5 * 60_000) return cached;
+  async listCursorModels(force = false, session: Session = this.current): Promise<{ models: CursorModel[]; error?: string }> {
+    const command = session.ws.settings().cursor.command;
+    const cached = this.cursorModelsCache.get(command);
+    if (!force && cached && Date.now() - cached.at < 5 * 60_000) return cached;
     const result = await cursorModels(command);
-    this.cursorModelsCache = { at: Date.now(), command, ...result };
+    this.cursorModelsCache.set(command, { at: Date.now(), ...result });
     return result;
   }
 
@@ -348,24 +450,23 @@ export class AppState {
   }
 
   /** Every model a route offers; the demo models only exist in the demo workspace. */
-  async models(source: CredentialSource, force = false): Promise<{ models: ModelOption[]; error?: string }> {
-    if (source === "demo") return { models: this.demo ? DEMO_MODELS : [] };
-    if (source === "cursor") return this.listCursorModels(force);
+  async models(source: CredentialSource, force = false, session: Session = this.current): Promise<{ models: ModelOption[]; error?: string }> {
+    if (source === "demo") return { models: session.demo ? DEMO_MODELS : [] };
+    if (source === "cursor") return this.listCursorModels(force, session);
     return { models: await this.listPiModels(source === "chatgpt" ? "openai" : "deepseek") };
   }
 
-  /** A model the user picked, checked against its route's live list ("one family, one route" included). */
-  async resolveModel(source: string, model: string): Promise<ChatModel> {
+  /** A model the user picked for a chat in `session`, checked against its route's live list ("one family, one route" included). */
+  async resolveModel(source: string, model: string, session: Session = this.current): Promise<ChatModel> {
     const routeError = validateModelRoute(source, model);
     if (routeError) throw new Error(routeError);
     const route = source as CredentialSource;
-    const found = (await this.models(route)).models.find((m) => m.id === model);
+    const found = (await this.models(route, false, session)).models.find((m) => m.id === model);
     if (!found) throw new Error(`${ROUTES[route].label} 线路上没有模型 ${model}`);
     return { source: route, model, name: found.name || model };
   }
 
-  private tidyModel(): TidyModel | undefined {
-    const demo = this.demo;
+  private tidyModel(demo: boolean): TidyModel | undefined {
     if (!demo && !this.auth.deepseek) return undefined;
     const model = demo ? "demo-tidy" : "deepseek-v4-pro";
     return {

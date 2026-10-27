@@ -1,14 +1,30 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "./api";
-import type { AppStateResponse, Thread } from "./types";
+import type { AppStateResponse, Thread, ThreadSummary } from "./types";
 
 type ServerMessage =
   | { type: "hello" }
   | { type: "state" }
-  | { type: "threads" }
-  | { type: "tidy" }
-  | { type: "thread"; thread: Thread }
-  | { type: "delta"; threadId: string; itemId: string; delta: string };
+  | { type: "threads"; workspace: string }
+  | { type: "tidy"; workspace: string }
+  | { type: "thread"; thread: Thread; workspace: string }
+  | { type: "delta"; threadId: string; itemId: string; delta: string; workspace: string };
+
+function summary(t: Thread): ThreadSummary {
+  return { id: t.id, title: t.title, status: t.status, updatedAt: t.updatedAt, runs: t.runs.length, model: t.model };
+}
+
+const upsert = (list: ThreadSummary[], t: ThreadSummary) => [t, ...list.filter((x) => x.id !== t.id)];
+
+/** Folds a live chat update into the project it belongs to (and the current project's list). */
+function withThread(s: AppStateResponse, thread: Thread, workspace: string): AppStateResponse {
+  const t = summary(thread);
+  return {
+    ...s,
+    projects: s.projects.map((p) => (p.root === workspace ? { ...p, threads: upsert(p.threads, t) } : p)),
+    threads: workspace === s.workspace.root ? upsert(s.threads, t) : s.threads,
+  };
+}
 
 type Listener = (msg: ServerMessage) => void;
 
@@ -62,26 +78,7 @@ export function BatonProvider({ children }: { children: ReactNode }) {
       socket.onmessage = (event) => {
         const msg = JSON.parse(event.data as string) as ServerMessage;
         if (msg.type === "state" || msg.type === "threads") scheduleRefresh();
-        if (msg.type === "thread") {
-          setState((s) =>
-            s
-              ? {
-                  ...s,
-                  threads: [
-                    {
-                      id: msg.thread.id,
-                      title: msg.thread.title,
-                      status: msg.thread.status,
-                      updatedAt: msg.thread.updatedAt,
-                      runs: msg.thread.runs.length,
-                      model: msg.thread.model,
-                    },
-                    ...s.threads.filter((t) => t.id !== msg.thread.id),
-                  ],
-                }
-              : s,
-          );
-        }
+        if (msg.type === "thread") setState((s) => s && withThread(s, msg.thread, msg.workspace));
         for (const l of listeners.current) l(msg);
       };
     };

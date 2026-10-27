@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { ProjectChip } from "./section";
 import { familyLabel } from "@baton/core/families";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,7 +38,9 @@ export function StatsPage() {
       <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
         <div className="flex items-end justify-between gap-3">
           <div>
-            <h1 className="text-xl font-semibold">统计</h1>
+            <h1 className="flex items-center gap-2 text-xl font-semibold">
+              统计 <ProjectChip />
+            </h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
               按「运行时 + 模型」统计：回复成功了多少、改过多少次文件、它的改动被别的模型检查时通过了多少，以及它替别人做了多少次检查。用这些数字决定平时用谁。
             </p>

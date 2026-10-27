@@ -29,7 +29,7 @@ export function startServer(state: AppState, port = DEFAULT_PORT): Promise<Runni
       resolve({
         url: `http://${HOST}:${info.port}`,
         async close() {
-          await state.orchestrator.stopAll();
+          await state.stopAll();
           for (const client of wss.clients) client.terminate();
           wss.close();
           await new Promise<void>((done) => server.close(() => done()));

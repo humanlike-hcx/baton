@@ -1,22 +1,28 @@
 import { useState } from "react";
-import { ArrowUp, Loader2 } from "lucide-react";
+import { ArrowUp, FolderOpen, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { post } from "@/lib/api";
 import { ACCESS } from "@/lib/format";
 import { findModel, lastModel, rememberModel, toChatModel, usableModels, useModels } from "@/lib/models";
+import { useSwitchProject } from "@/lib/projects";
 import { href, navigate } from "@/lib/router";
 import { useBaton } from "@/lib/store";
 import type { ChatAccess, ChatModel, Thread } from "@/lib/types";
 import { AccessSwitch } from "./access-switch";
 import { ModelPicker } from "./model-picker";
 
-/** What Baton opens into: an empty chat, ready for the first message. */
+const OPEN_OTHER = "__open_other__";
+
+/** What Baton opens into: an empty chat in the current project, ready for the first message. */
 export function NewChat() {
   const { state, error } = useBaton();
   const { routes } = useModels();
+  const switchProject = useSwitchProject();
+  const pickProject = (root: string) => switchProject(root).catch((e: Error) => toast.error(e.message));
   const [picked, setPicked] = useState<ChatModel>();
   const [access, setAccess] = useState<ChatAccess>("read");
   const [text, setText] = useState("");
@@ -31,7 +37,7 @@ export function NewChat() {
     if (!text.trim() || !model || sending) return;
     setSending(true);
     try {
-      const body = { source: model.source, model: model.model };
+      const body = { source: model.source, model: model.model, workspace: state?.workspace.root };
       let thread: Thread;
       if (access === "read") {
         thread = await post<Thread>("/api/threads", { ...body, task: text });
@@ -92,6 +98,22 @@ export function NewChat() {
             }}
           />
           <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Select value={state.workspace.root} onValueChange={(root) => (root === OPEN_OTHER ? navigate({ page: "settings", tab: "workspace" }) : void pickProject(root))}>
+              <SelectTrigger size="sm" className="max-w-48" aria-label="在哪个项目里">
+                <FolderOpen className="text-muted-foreground" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {state.projects.map((p) => (
+                  <SelectItem key={p.root} value={p.root} title={p.root}>
+                    {p.name}
+                    {p.demo && <span className="text-xs text-muted-foreground">演示</span>}
+                  </SelectItem>
+                ))}
+                <SelectSeparator />
+                <SelectItem value={OPEN_OTHER}>打开其他项目…</SelectItem>
+              </SelectContent>
+            </Select>
             <ModelPicker value={model} onChange={setPicked} className="max-w-72 min-w-44" />
             <AccessSwitch value={access} onChange={setAccess} />
             <Button size="icon" className="ml-auto" disabled={!text.trim() || !model || sending} onClick={() => void send()} aria-label="发送">
@@ -121,7 +143,7 @@ export function NewChat() {
               <a className="mx-1 underline" href={href({ page: "models" })}>
                 「模型」页
               </a>
-              登录，再到设置里打开你自己的项目目录。
+              登录，再在左边「项目」旁的文件夹按钮里打开你自己的项目目录。演示里的对话不受影响，随时能回来看。
             </p>
           </div>
         )}
