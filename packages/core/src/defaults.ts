@@ -129,11 +129,11 @@ export function defaultAgents(demo: boolean): AgentCard[] {
   const real: AgentCard[] = [
     {
       id: "planner-gpt",
-      name: "方案 · GPT-5.5",
+      name: "方案 · GPT-6.1 Sol",
       runtime: "pi",
       source: "chatgpt",
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-6.1-sol",
       roles: ["plan", "advisor"],
       permissions: { ...readOnly },
       costTier: 3,

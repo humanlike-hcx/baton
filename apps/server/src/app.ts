@@ -14,6 +14,7 @@ import {
   updateMemory,
   validateAgentRoute,
   type AgentCard,
+  type ChatGptMethod,
   type Role,
   type Stage,
   type Thread,
@@ -334,7 +335,11 @@ export function createApp(state: AppState): Hono {
 
   // ---------- auth ----------
 
-  app.post("/api/auth/chatgpt/login", async (c) => c.json({ url: await state.startChatGptLogin() }));
+  app.post("/api/auth/chatgpt/login", async (c) => {
+    const { method = "chatgpt" } = await body<{ method?: ChatGptMethod }>(c);
+    if (method !== "chatgpt" && method !== "codex") bad("登录方式只能是 chatgpt 或 codex");
+    return c.json({ url: await state.startChatGptLogin(method) });
+  });
   app.post("/api/auth/chatgpt/manual", async (c) => {
     const { input } = await body<{ input: string }>(c);
     state.submitChatGptManual(input);

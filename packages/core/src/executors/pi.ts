@@ -10,6 +10,7 @@ import {
   createAgentSession,
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
+import { CHATGPT_PROVIDERS, chatgptMethod } from "../credentials.ts";
 import { runTool, type ToolSpec } from "../tools.ts";
 import { newId } from "../util.ts";
 import { DEMO_CONTEXT_WINDOW, demoComplete, demoScript, demoSettings } from "./demo.ts";
@@ -84,11 +85,15 @@ export class PiExecutor implements Executor {
       runtime.registerNativeProvider(faux.provider);
       cleanup = () => runtime.unregisterProvider(providerId);
       model = runtime.getModel(providerId, agent.model);
+    } else if (agent.source === "chatgpt") {
+      const method = await chatgptMethod(this.options.credentials);
+      if (!method) return { status: "failed", finalText: "", error: "还没有用 ChatGPT 登录。请到「设置 → 账号」里登录。" };
+      model = runtime.getModel(CHATGPT_PROVIDERS[method], agent.model);
+      if (!model && method === "codex") {
+        return { status: "failed", finalText: "", error: `用 Codex 账号登录时没有 ${agent.model}。请到 Agents 页给这个 agent 换一个列表里的 GPT 模型。` };
+      }
     } else {
       const credential = await this.options.credentials.read(agent.provider);
-      if (agent.source === "chatgpt" && credential?.type !== "oauth") {
-        return { status: "failed", finalText: "", error: "还没有用 ChatGPT 登录。请到「设置 → 账号」里登录。" };
-      }
       if (agent.source === "deepseek" && credential?.type !== "api_key") {
         return { status: "failed", finalText: "", error: "还没有配置 DeepSeek API key。请到「设置 → 账号」里填写。" };
       }

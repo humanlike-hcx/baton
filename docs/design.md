@@ -10,9 +10,16 @@
 
 | 运行时 | 额度来源 | 模型 | 说明 |
 |---|---|---|---|
-| Pi（我们的循环） | ChatGPT 登录（Sign in with ChatGPT） | GPT 系 | GPT 只走这一条 |
+| Pi（我们的循环） | ChatGPT 登录（Sign in with ChatGPT，或与 Codex CLI 相同的 Codex 账号登录） | GPT 系 | GPT 只走这一条 |
 | Pi（我们的循环） | DeepSeek API key | DeepSeek 系 | 唯一允许使用 key 的例外 |
 | Cursor Agent（通过 ACP） | Cursor 登录（`agent login`） | Cursor 账号可用的非 GPT 模型 | 过滤掉 GPT 家族，不提供 Auto |
+
+ChatGPT 有两种登录方式，都走 ChatGPT 订阅，同一时间只保留一个凭证：
+
+- **Sign in with ChatGPT**：Pi 的 `openai` provider，OpenAI 给第三方 agent 的入口，授权必须带 `chatgpt.tokens.use.direct`，不是每个账号都开放。
+- **Codex 账号**：Pi 的 `openai-codex` provider，与 Codex CLI 是同一套 OAuth（同一 client ID、`localhost:1455` 回调），请求发到 `chatgpt.com/backend-api`。Pi 把它标成 legacy，所以只作备选。
+
+GPT agent 卡片里的 provider 始终是 `openai`；运行时 Pi 执行器按已登录的方式选 provider，两者都在时优先 Sign in with ChatGPT。Agents 页的 GPT 模型列表也来自已登录的方式。Codex 账号能用的模型比较少（GPT-5.6 和 GPT-6 系列），卡片上的模型它没有时，运行在发请求之前就失败，并提示换模型。
 
 不做：多人、账号体系、看板、聊天软件集成、容器沙箱、Claude 订阅 token。
 

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { AuthPrompt } from "@earendil-works/pi-ai";
 import {
   AcpExecutor,
+  CHATGPT_PROVIDERS,
   ContextTidier,
   FileCredentialStore,
   Orchestrator,
@@ -15,9 +16,11 @@ import {
   deviceId,
   readJson,
   batonHome,
+  chatgptMethod,
   writeFileAtomic,
   type AgentCard,
   type AuthStatus,
+  type ChatGptMethod,
   type CursorModel,
   type CursorStatus,
   type OrchestratorEvent,
@@ -49,10 +52,15 @@ interface Persisted {
 type Broadcast = (message: unknown) => void;
 
 interface ChatGptLogin {
+  method: ChatGptMethod;
   url?: string;
   controller: AbortController;
   manual?: (input: string) => void;
-  error?: string;
+}
+
+/** Login errors can quote token responses; keep anything token-like out of what reaches the browser. */
+function loginError(error: Error): string {
+  return error.message.replace(/[A-Za-z0-9_\-.]{40,}/g, "[已隐藏]").slice(0, 300);
 }
 
 export interface AppStateOptions {
@@ -79,7 +87,8 @@ export class AppState {
   tidier!: ContextTidier;
   demo = false;
   private persisted: Persisted;
-  private auth = { chatgpt: false, deepseek: false };
+  private auth: { chatgpt?: ChatGptMethod; deepseek: boolean } = { deepseek: false };
+  private chatgptError?: string;
   private cursor: CursorStatus = { installed: false, loggedIn: false };
   private cursorCheckedAt = 0;
   private cursorModelsCache?: { at: number; command: string; models: CursorModel[]; error?: string };
@@ -177,7 +186,7 @@ export class AppState {
       case "demo":
         return true;
       case "chatgpt":
-        return this.auth.chatgpt;
+        return Boolean(this.auth.chatgpt);
       case "deepseek":
         return this.auth.deepseek;
       case "cursor":
@@ -188,9 +197,8 @@ export class AppState {
   }
 
   async refreshAuth(includeCursor = false): Promise<void> {
-    const openai = await this.credentials.read("openai");
     const deepseek = await this.credentials.read("deepseek");
-    this.auth.chatgpt = openai?.type === "oauth";
+    this.auth.chatgpt = await chatgptMethod(this.credentials);
     this.auth.deepseek = deepseek?.type === "api_key" && Boolean(deepseek.key);
     if (includeCursor || Date.now() - this.cursorCheckedAt > 60_000) {
       this.cursorCheckedAt = Date.now();
@@ -200,22 +208,28 @@ export class AppState {
 
   authStatus(): AuthStatus {
     return {
-      chatgpt: { loggedIn: this.auth.chatgpt, pending: this.chatgptLogin?.url ? { url: this.chatgptLogin.url } : undefined },
+      chatgpt: {
+        loggedIn: Boolean(this.auth.chatgpt),
+        method: this.auth.chatgpt,
+        pending: this.chatgptLogin?.url ? { url: this.chatgptLogin.url, method: this.chatgptLogin.method } : undefined,
+        error: this.chatgptError,
+      },
       deepseek: { configured: this.auth.deepseek },
       cursor: { ...this.cursor, pending: this.cursorLoginFlow?.url ? { url: this.cursorLoginFlow.url } : undefined },
     };
   }
 
-  /** Starts Sign in with ChatGPT and resolves with the authorization URL. */
-  async startChatGptLogin(): Promise<string> {
+  /** Starts a ChatGPT login with either method and resolves with the authorization URL. */
+  async startChatGptLogin(method: ChatGptMethod = "chatgpt"): Promise<string> {
     this.chatgptLogin?.controller.abort();
     const controller = new AbortController();
-    const flow: ChatGptLogin = { controller };
+    const flow: ChatGptLogin = { method, controller };
     this.chatgptLogin = flow;
+    this.chatgptError = undefined;
     const runtime = await this.pi.runtime();
     const url = new Promise<string>((resolve, reject) => {
       const done = runtime.login(
-        "openai",
+        CHATGPT_PROVIDERS[method],
         "oauth",
         {
           signal: controller.signal,
@@ -228,6 +242,8 @@ export class AppState {
           },
           prompt: (p: AuthPrompt) =>
             new Promise<string>((res, rej) => {
+              // The Codex login first asks browser or device code; Baton always opens the browser.
+              if (p.type === "select" && p.options.some((o) => o.id === "browser")) return res("browser");
               if (p.type !== "manual_code") return rej(new Error(`不支持的登录交互：${p.type}`));
               flow.manual = res;
               p.signal?.addEventListener("abort", () => rej(new Error("aborted")), { once: true });
@@ -238,11 +254,16 @@ export class AppState {
       done.then(
         async () => {
           if (this.chatgptLogin === flow) this.chatgptLogin = undefined;
+          // Keep a single ChatGPT credential so the status always names the method that runs.
+          const other = method === "chatgpt" ? "codex" : "chatgpt";
+          await this.credentials.delete(CHATGPT_PROVIDERS[other]);
           await this.refreshAuth();
           this.broadcast({ type: "state" });
         },
         (error: Error) => {
-          if (this.chatgptLogin === flow) this.chatgptLogin = undefined;
+          if (this.chatgptLogin !== flow) return reject(error);
+          this.chatgptLogin = undefined;
+          if (!controller.signal.aborted) this.chatgptError = loginError(error);
           reject(error);
           this.broadcast({ type: "state" });
         },
@@ -263,8 +284,11 @@ export class AppState {
 
   async logoutChatGpt(): Promise<void> {
     const runtime = await this.pi.runtime();
-    await runtime.logout("openai").catch(() => this.credentials.delete("openai"));
-    await this.credentials.delete("openai");
+    for (const provider of Object.values(CHATGPT_PROVIDERS)) {
+      await runtime.logout(provider).catch(() => undefined);
+      await this.credentials.delete(provider);
+    }
+    this.chatgptError = undefined;
     await this.refreshAuth();
   }
 
@@ -303,10 +327,12 @@ export class AppState {
     return result;
   }
 
+  /** GPT models come from the signed-in ChatGPT method, so the list matches what runs can use. */
   async listPiModels(provider: "openai" | "deepseek") {
     const runtime = await this.pi.runtime();
+    const piProvider = provider === "openai" && this.auth.chatgpt ? CHATGPT_PROVIDERS[this.auth.chatgpt] : provider;
     return runtime
-      .getModels(provider)
+      .getModels(piProvider)
       .filter((m) => provider !== "openai" || /^(gpt-5|gpt-6|o3|o4)/.test(m.id))
       .map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow }));
   }

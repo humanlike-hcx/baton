@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import type { ChatGptMethod } from "./types.ts";
 import { readJson, writeFileAtomic } from "./util.ts";
 
 export function batonHome(): string {
@@ -63,6 +64,19 @@ export class FileCredentialStore implements CredentialStore {
       this.save(data);
     });
   }
+}
+
+/**
+ * Pi provider behind each ChatGPT sign-in method. Agent cards always name "openai";
+ * runs use whichever method is signed in, preferring Sign in with ChatGPT.
+ */
+export const CHATGPT_PROVIDERS: Record<ChatGptMethod, string> = { chatgpt: "openai", codex: "openai-codex" };
+
+export async function chatgptMethod(credentials: CredentialStore): Promise<ChatGptMethod | undefined> {
+  for (const method of ["chatgpt", "codex"] as const) {
+    if ((await credentials.read(CHATGPT_PROVIDERS[method]))?.type === "oauth") return method;
+  }
+  return undefined;
 }
 
 /** Stable per-installation UUID; Sign in with ChatGPT requires one. */

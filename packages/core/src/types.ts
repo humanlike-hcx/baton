@@ -283,8 +283,11 @@ export interface Briefing {
   hash: string;
 }
 
+/** "chatgpt" is Sign in with ChatGPT; "codex" is the ChatGPT login the Codex CLI uses. Both bill the ChatGPT subscription. */
+export type ChatGptMethod = "chatgpt" | "codex";
+
 export interface AuthStatus {
-  chatgpt: { loggedIn: boolean; pending?: { url: string } };
+  chatgpt: { loggedIn: boolean; method?: ChatGptMethod; pending?: { url: string; method: ChatGptMethod }; error?: string };
   deepseek: { configured: boolean };
   cursor: { installed: boolean; loggedIn: boolean; account?: string; pending?: { url: string }; error?: string };
 }

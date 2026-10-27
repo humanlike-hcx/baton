@@ -12,7 +12,7 @@ Baton 是接力棒：agent 之间按规则交接，同一时间只有一个 agen
 
 | 运行时 | 账号来源 | 模型 |
 |---|---|---|
-| Pi | ChatGPT 登录（Sign in with ChatGPT） | GPT 系，只走这一条 |
+| Pi | ChatGPT 登录（Sign in with ChatGPT，或 Codex 账号） | GPT 系，只走这一条 |
 | Pi | DeepSeek API key（唯一用 key 的例外） | DeepSeek 系 |
 | Cursor Agent（ACP） | Cursor 登录（`agent login`） | Cursor 里的非 GPT 模型（Claude、Gemini、Composer…），不提供 Auto |
 
@@ -49,7 +49,7 @@ pnpm dev
 
 在「设置 → 账号」里：
 
-- **ChatGPT**：点「用 ChatGPT 登录」，在浏览器完成授权，会回调到本机 1455 端口。如果工作台跑在别的机器上，把浏览器最后跳转到的 `localhost:1455/…` 链接粘贴回来即可。
+- **ChatGPT**：点「用 ChatGPT 登录」，在浏览器完成授权，会回调到本机 1455 端口。如果工作台跑在别的机器上，把浏览器最后跳转到的 `…:1455/auth/callback…` 链接粘贴回来即可。如果 Sign in with ChatGPT 对你的账号不可用（能登 Codex CLI 却登不上这里），改点「用 Codex 账号登录」，它和 Codex CLI 是同一套登录，同样走 ChatGPT 订阅。
 - **Cursor**：先安装 Cursor Agent CLI（`curl https://cursor.com/install -fsS | bash`），再点「登录 Cursor」。没装 CLI 时可以打开「用内置的模拟 Cursor」体验 ACP 流程。
 - **DeepSeek**：填 `sk-` 开头的 API key。
 

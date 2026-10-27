@@ -177,6 +177,60 @@ describe("HTTP API: signing out (US-9)", () => {
   });
 });
 
+describe("HTTP API: ChatGPT through the Codex login (US-88)", () => {
+  const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000, accountId: "acct" };
+
+  it("runs GPT agents on the Codex login and lists only the models it offers", async () => {
+    const s = await testServer();
+    const file = path.join(s.home, "credentials.json");
+    fs.writeFileSync(file, JSON.stringify({ "openai-codex": oauth }), { mode: 0o600 });
+    const state = await s.get("/api/state");
+    expect(state.auth.chatgpt).toMatchObject({ loggedIn: true, method: "codex" });
+
+    const models = (await s.get<{ chatgpt: { id: string }[] }>("/api/models")).chatgpt.map((m) => m.id);
+    expect(models).toContain("gpt-6.1-sol");
+    expect(models).not.toContain("gpt-5.5");
+
+    // A model the Codex login lacks fails before any request, with a fix the user can make.
+    const agent = { name: "旧 GPT", runtime: "pi", source: "chatgpt", provider: "openai", model: "gpt-5.5", roles: ["chat"], permissions: { write: "deny", exec: "deny", network: "deny" }, costTier: 3, enabled: true, body: "" };
+    await s.put("/api/agents/old-gpt", agent);
+    expect((await s.get("/api/state")).agents.find((a: { id: string }) => a.id === "old-gpt").available).toBe(true);
+    const created = await s.post<Thread>("/api/threads", { kind: "chat", task: "在吗", agentId: "old-gpt" });
+    const t = await s.waitForThread(created.id, (x) => x.runs.length > 0 && x.runs[0]!.status !== "running", "failed run");
+    expect(t.runs[0]).toMatchObject({ status: "failed" });
+    expect(t.runs[0]!.error).toContain("用 Codex 账号登录时没有 gpt-5.5");
+
+    fs.writeFileSync(file, JSON.stringify({ openai: oauth, "openai-codex": oauth }), { mode: 0o600 });
+    expect((await s.get("/api/state")).auth.chatgpt.method).toBe("chatgpt");
+    await s.post("/api/auth/chatgpt/logout");
+    expect((await s.get("/api/state")).auth.chatgpt.loggedIn).toBe(false);
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({});
+  });
+
+  it("starts the Codex login and shows why it failed", async () => {
+    const s = await testServer();
+    expect((await s.request("POST", "/api/auth/chatgpt/login", { method: "apikey" })).status).toBe(400);
+
+    const { url } = await s.post<{ url: string }>("/api/auth/chatgpt/login", { method: "codex" });
+    const auth = new URL(url);
+    expect(auth.origin + auth.pathname).toBe("https://auth.openai.com/oauth/authorize");
+    expect(auth.searchParams.get("client_id")).toBe("app_EMoamEEZ73f0CkXaXp7hrann");
+    expect(auth.searchParams.get("originator")).toBe("Baton");
+    expect((await s.get("/api/state")).auth.chatgpt.pending).toEqual({ url, method: "codex" });
+
+    await s.post("/api/auth/chatgpt/manual", { input: "http://localhost:1455/auth/callback?code=c&state=not-ours" });
+    const start = Date.now();
+    let chatgpt;
+    for (;;) {
+      chatgpt = (await s.get("/api/state")).auth.chatgpt;
+      if (chatgpt.error || Date.now() - start > 5_000) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(chatgpt).toMatchObject({ loggedIn: false, error: "State mismatch" });
+    expect(chatgpt.pending).toBeUndefined();
+  });
+});
+
 describe("HTTP API: stats (US-76)", () => {
   it("counts runs, first-pass and send-backs, decisions and tokens per runtime and model", async () => {
     const s = await testServer();

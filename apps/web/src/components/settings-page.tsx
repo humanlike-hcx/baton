@@ -98,8 +98,14 @@ function AccountsTab() {
       <Section
         title="ChatGPT"
         description="GPT 系模型只从这里接入，跑在 Pi 运行时里。Cursor 里的 GPT 模型不会出现，避免重复。"
-        status={<StatusPill ok={auth.chatgpt.loggedIn} label={auth.chatgpt.loggedIn ? "已登录" : "未登录"} />}
+        status={<StatusPill ok={auth.chatgpt.loggedIn} label={auth.chatgpt.loggedIn ? (auth.chatgpt.method === "codex" ? "已登录 · Codex 账号" : "已登录") : "未登录"} />}
       >
+        {auth.chatgpt.error && !auth.chatgpt.pending && !auth.chatgpt.loggedIn && (
+          <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+            登录失败：{auth.chatgpt.error}
+            <div className="mt-1 text-xs text-muted-foreground">如果这个账号能登录 Codex CLI，可以改用「用 Codex 账号登录」。</div>
+          </div>
+        )}
         {auth.chatgpt.pending ? (
           <div className="space-y-3">
             <p className="text-sm">
@@ -111,10 +117,10 @@ function AccountsTab() {
             </a>
             <div className="space-y-1.5">
               <Label htmlFor="manual" className="text-xs text-muted-foreground">
-                如果浏览器跳转失败（比如工作台跑在另一台机器上），把地址栏里最后的 localhost:1455/… 整个链接粘贴到这里：
+                如果浏览器跳转失败（比如工作台跑在另一台机器上），把地址栏里最后的 …:1455/auth/callback… 整个链接粘贴到这里：
               </Label>
               <div className="flex gap-2">
-                <Input id="manual" value={manual} onChange={(e) => setManual(e.target.value)} placeholder="http://localhost:1455/auth/callback?code=…" className="font-mono text-xs" />
+                <Input id="manual" value={manual} onChange={(e) => setManual(e.target.value)} placeholder="http://127.0.0.1:1455/auth/callback?code=…" className="font-mono text-xs" />
                 <Button
                   disabled={!manual.trim() || busy === "manual"}
                   onClick={() =>
@@ -138,18 +144,33 @@ function AccountsTab() {
             退出登录
           </Button>
         ) : (
-          <Button
-            disabled={busy === "login"}
-            onClick={() =>
-              run("login", async () => {
-                const { url } = await post<{ url: string }>("/api/auth/chatgpt/login");
-                window.open(url, "_blank", "noopener");
-                await refresh();
-              })
-            }
-          >
-            {busy === "login" && <Loader2 className="animate-spin" />}用 ChatGPT 登录
-          </Button>
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ["chatgpt", "用 ChatGPT 登录", "default"],
+                  ["codex", "用 Codex 账号登录", "outline"],
+                ] as const
+              ).map(([method, label, variant]) => (
+                <Button
+                  key={method}
+                  variant={variant}
+                  disabled={Boolean(busy?.startsWith("login"))}
+                  onClick={() =>
+                    run(`login-${method}`, async () => {
+                      const { url } = await post<{ url: string }>("/api/auth/chatgpt/login", { method });
+                      window.open(url, "_blank", "noopener");
+                      await refresh();
+                    })
+                  }
+                >
+                  {busy === `login-${method}` && <Loader2 className="animate-spin" />}
+                  {label}
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">两种方式都用你的 ChatGPT 订阅。「Codex 账号」和 Codex CLI 是同一套登录，Sign in with ChatGPT 对你的账号不可用时用它。</p>
+          </div>
         )}
       </Section>
 
