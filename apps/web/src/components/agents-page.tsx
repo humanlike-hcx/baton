@@ -255,7 +255,7 @@ function AgentEditor({ agent, isNew, open, onOpenChange, demo }: { agent: AgentC
                 </button>
               </div>
               {showCustom ? (
-                <Input value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value.trim() })} placeholder="模型 ID，例如 sonnet-4.5" className="font-mono" />
+                <Input value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value.trim() })} placeholder="模型 ID，例如 claude-sonnet-5-5-medium" className="font-mono" />
               ) : (
                 <Select value={draft.model ?? ""} onValueChange={(v) => setDraft({ ...draft, model: v })}>
                   <SelectTrigger className="w-full">
@@ -272,7 +272,7 @@ function AgentEditor({ agent, isNew, open, onOpenChange, demo }: { agent: AgentC
                 </Select>
               )}
               <p className="text-xs text-muted-foreground">
-                {draft.source === "cursor" && (models?.cursorError ? `读不到 Cursor 模型列表：${models.cursorError}` : "已去掉 GPT 系（只走 ChatGPT）和 Auto。")}
+                {draft.source === "cursor" && (models?.cursorError ? `读不到 Cursor 模型列表：${models.cursorError}` : "已去掉 GPT 系（只走 ChatGPT）、DeepSeek 系（只走 DeepSeek key）和 Auto。")}
                 {draft.source === "chatgpt" && "只列出 GPT 系，用你的 ChatGPT 订阅。"}
                 {draft.source === "deepseek" && "唯一用 API key 的来源。"}
                 {draft.source === "demo" && "离线脚本模型，用来体验流程。"}{" "}

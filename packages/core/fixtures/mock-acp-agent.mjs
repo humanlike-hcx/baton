@@ -15,7 +15,9 @@ if (command === "status") {
   process.exit(0);
 }
 if (command === "models") {
-  console.log("Available models\n\nauto - Auto\ncomposer-1 - Composer 1\nsonnet-4.5 - Claude 4.5 Sonnet (current)\nsonnet-4.5-thinking - Claude 4.5 Sonnet Thinking\ngpt-5 - GPT-5\ngpt-5-codex - GPT-5 Codex\ngemini-2.5-pro - Gemini 2.5 Pro\ngrok-code - Grok Code\n");
+  console.log(
+    "Available models\n\nauto - Auto\ncomposer-2.5 - Composer 2.5\nclaude-sonnet-5-5-medium - Claude Sonnet 5.5 Medium (current)\nclaude-sonnet-5-5-high - Claude Sonnet 5.5 High\ngpt-5.6-sol - GPT-5.6 Sol\ngpt-5.3-codex - GPT-5.3 Codex\ngemini-4-argon-medium - Gemini 4 Argon Medium\ngrok-4.7-medium - Grok 4.7 Medium\ndeepseek-v41-flash-1017-medium - DeepSeek V4.1 Flash Medium\n",
+  );
   process.exit(0);
 }
 if (command === "login") {

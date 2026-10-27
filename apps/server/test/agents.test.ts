@@ -40,6 +40,7 @@ describe("HTTP API: agent routes (US-11)", () => {
     const cases: [Partial<AgentCard>, string][] = [
       [{ model: "gpt-5.5" }, "GPT 系模型只走 ChatGPT"],
       [{ model: "auto" }, "不提供 Auto"],
+      [{ model: "deepseek-v41-flash-1017-medium" }, "DeepSeek 系模型只走 DeepSeek key"],
       [{ source: "chatgpt", runtime: "pi", provider: "openai", model: "sonnet-4.5" }, "只能使用 GPT 系模型"],
       [{ source: "deepseek", runtime: "pi", provider: "deepseek", model: "gpt-5.5" }, "只能使用 DeepSeek 模型"],
       [{ source: "chatgpt", runtime: "cursor", provider: "cursor", model: "gpt-5.5" }, "只能跑在 Pi 运行时"],

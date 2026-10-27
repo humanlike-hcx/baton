@@ -12,7 +12,7 @@
 |---|---|---|---|
 | Pi（我们的循环） | ChatGPT 登录（Sign in with ChatGPT，或与 Codex CLI 相同的 Codex 账号登录） | GPT 系 | GPT 只走这一条 |
 | Pi（我们的循环） | DeepSeek API key | DeepSeek 系 | 唯一允许使用 key 的例外 |
-| Cursor Agent（通过 ACP） | Cursor 登录（`agent login`） | Cursor 账号可用的非 GPT 模型 | 过滤掉 GPT 家族，不提供 Auto |
+| Cursor Agent（通过 ACP） | Cursor 登录（`agent login`） | Cursor 账号可用的非 GPT、非 DeepSeek 模型 | 过滤掉 GPT 和 DeepSeek 家族，不提供 Auto |
 
 ChatGPT 有两种登录方式，都走 ChatGPT 订阅，同一时间只保留一个凭证：
 

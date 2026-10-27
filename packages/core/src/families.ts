@@ -16,12 +16,12 @@ export function modelFamily(model: string, provider?: string): string {
   return id.split(/[-_.:]/)[0] || id;
 }
 
-/** Cursor's model list minus GPT (only via ChatGPT) and Auto (unknown family). */
+/** Cursor's model list minus GPT (only via ChatGPT), DeepSeek (only via its key) and Auto (unknown family). */
 export function filterCursorModels<T extends { id: string }>(models: T[]): T[] {
   return models.filter((m) => {
     const id = m.id.toLowerCase();
     if (id === "auto" || id.startsWith("auto-") || id === "default") return false;
-    return modelFamily(m.id) !== "gpt";
+    return !["gpt", "deepseek"].includes(modelFamily(m.id));
   });
 }
 
@@ -41,6 +41,7 @@ export function validateAgentRoute(agent: { runtime: string; source: string; pro
     case "cursor":
       if (agent.runtime !== "cursor" || agent.provider !== "cursor") return "Cursor 登录只能跑在 Cursor 运行时";
       if (family === "gpt") return "GPT 系模型只走 ChatGPT 登录，不能通过 Cursor 使用";
+      if (family === "deepseek") return "DeepSeek 系模型只走 DeepSeek key，不能通过 Cursor 使用";
       if (/^auto$/i.test(agent.model)) return "不提供 Auto：每个 agent 必须明确模型";
       return undefined;
     case "demo":
