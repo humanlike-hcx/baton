@@ -5,7 +5,7 @@ import type { CredentialStore } from "@earendil-works/pi-ai";
 import { AcpExecutor } from "../src/executors/acp.ts";
 import { PiExecutor } from "../src/executors/pi.ts";
 import { Orchestrator, type OrchestratorEvent } from "../src/orchestrator.ts";
-import type { Thread } from "../src/types.ts";
+import type { ChatModel, Thread } from "../src/types.ts";
 import { Workspace } from "../src/workspace.ts";
 
 export function tempDir(prefix = "baton-test-"): string {
@@ -44,7 +44,8 @@ export function demoSetup(options: { autoApprove?: boolean; mutate?: (ws: Worksp
     ws,
     pi: new PiExecutor({ credentials: memoryCredentials(), agentDir: tempDir("baton-agent-"), demoTokensPerSecond: 100_000 }),
     acp: new AcpExecutor(),
-    available: (agent) => agent.source === "demo" || (agent.source === "cursor" && ws.settings().cursor.command.includes("mock-acp")),
+    unavailable: (model) =>
+      model.source === "demo" || (model.source === "cursor" && ws.settings().cursor.command.includes("mock-acp")) ? undefined : "还没有登录",
     onEvent: (e) => {
       events.push(e);
       if (options.autoApprove !== false && e.type === "thread") {
@@ -77,7 +78,7 @@ export async function waitForSettled(orch: Orchestrator, threadId: string, timeo
   await waitFor(
     () => {
       const t = orch.getThread(threadId)!;
-      return t.status === "waiting" || t.status === "paused" || t.status === "done" || (t.status === "idle" && t.runs.length > 0);
+      return t.status === "waiting" || t.status === "paused" || (t.status === "idle" && t.runs.length > 0 && t.notes.length === 0);
     },
     timeoutMs,
     `thread ${threadId} to settle`,
@@ -85,3 +86,8 @@ export async function waitForSettled(orch: Orchestrator, threadId: string, timeo
   await new Promise((r) => setTimeout(r, 30));
   return orch.getThread(threadId)!;
 }
+
+export const DEMO_CHAT: ChatModel = { source: "demo", model: "demo-chat", name: "对话" };
+export const DEMO_REVIEW: ChatModel = { source: "demo", model: "demo-review", name: "检查" };
+export const CURSOR_COMPOSER: ChatModel = { source: "cursor", model: "composer-2.5", name: "Composer 2.5" };
+export const CURSOR_SONNET: ChatModel = { source: "cursor", model: "claude-sonnet-5-5-medium", name: "Claude Sonnet 5.5 Medium" };

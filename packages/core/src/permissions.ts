@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentCard, AgentPermissions, Policy, WorkspaceSettings } from "./types.ts";
+import type { AgentPermissions, ChatAccess, Policy, RunAgent, WorkspaceSettings } from "./types.ts";
 import { globToRegExp } from "./util.ts";
 
 export class PermissionError extends Error {}
@@ -53,14 +53,14 @@ export function resolveWorkspacePath(
   const denied = matchesDeny(rel, settings.permissions.denyPaths);
   if (denied) throw new PermissionError(`路径被拒绝（规则 ${denied}）：${rel}`);
   if (mode === "write" && (rel === ".baton" || rel.startsWith(".baton/"))) {
-    throw new PermissionError("不能直接写 .baton/，请用 update_context / remember / write_handoff 等工具");
+    throw new PermissionError("不能直接写 .baton/，请用 update_context / remember 等工具");
   }
   return { abs, rel };
 }
 
 const SHELL_META = /[;&|`<>]|\$\(/;
 
-export function shellPolicy(command: string, settings: WorkspaceSettings, agent: AgentCard): { policy: Policy; reason: string } {
+export function shellPolicy(command: string, settings: WorkspaceSettings, agent: Pick<RunAgent, "name" | "permissions">): { policy: Policy; reason: string } {
   const trimmed = command.trim();
   if (!trimmed) return { policy: "deny", reason: "空命令" };
   for (const deny of settings.permissions.shellDeny) {
@@ -82,18 +82,17 @@ export function canWrite(permissions: Pick<AgentPermissions, "write">): boolean 
   return permissions.write !== "deny";
 }
 
-const POLICIES: Policy[] = ["allow", "ask", "deny"];
+export const CHAT_ACCESS: ChatAccess[] = ["read", "ask", "allow"];
 
-/** Cards saved before write became a policy stored `write: true / false`. */
-export function normalizePermissions(raw: Partial<Record<keyof AgentPermissions, unknown>> | undefined): AgentPermissions {
-  const policy = (value: unknown, fallback: Policy): Policy =>
-    value === true ? "allow" : value === false ? "deny" : POLICIES.includes(value as Policy) ? (value as Policy) : fallback;
-  return { write: policy(raw?.write, "deny"), exec: policy(raw?.exec, "ask"), network: policy(raw?.network, "deny") };
+/**
+ * A chat's access level as tool permissions. Reading never asks; in "allow" commands still pass the
+ * deny list and workspace boundary first (see shellPolicy and resolveWorkspacePath).
+ */
+export function accessPermissions(access: ChatAccess): AgentPermissions {
+  if (access === "allow") return { write: "allow", exec: "allow", network: "allow" };
+  if (access === "ask") return { write: "ask", exec: "ask", network: "ask" };
+  return { write: "deny", exec: "deny", network: "ask" };
 }
 
-export function permissionLevel(agent: Pick<AgentCard, "permissions">): number {
-  if (agent.permissions.exec === "allow") return 3;
-  if (canWrite(agent.permissions)) return 2;
-  if (agent.permissions.exec === "ask") return 1;
-  return 0;
-}
+/** A reviewer only reads: no file changes, no commands (the harness runs the checks). */
+export const REVIEW_PERMISSIONS: AgentPermissions = { write: "deny", exec: "deny", network: "deny" };

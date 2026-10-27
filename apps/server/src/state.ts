@@ -15,12 +15,15 @@ import {
   cursorStatus,
   deviceId,
   readJson,
-  validateAgentRoute,
+  validateModelRoute,
   batonHome,
   chatgptMethod,
   writeFileAtomic,
-  type AgentCard,
+  DEMO_MODELS,
+  ROUTES,
   type AuthStatus,
+  type ChatModel,
+  type CredentialSource,
   type ChatGptMethod,
   type CursorModel,
   type CursorStatus,
@@ -59,11 +62,11 @@ interface ChatGptLogin {
   manual?: (input: string) => void;
 }
 
-const CHAT_ROUTES = {
-  chatgpt: { label: "ChatGPT ", runtime: "pi", provider: "openai", costTier: 3 },
-  deepseek: { label: "DeepSeek ", runtime: "pi", provider: "deepseek", costTier: 1 },
-  cursor: { label: "Cursor ", runtime: "cursor", provider: "cursor", costTier: 2 },
-} as const;
+export interface ModelOption {
+  id: string;
+  name: string;
+  contextWindow?: number;
+}
 
 /** Login errors can quote token responses; keep anything token-like out of what reaches the browser. */
 function loginError(error: Error): string {
@@ -158,10 +161,9 @@ export class AppState {
       ws,
       pi: this.pi,
       acp: this.acp,
-      available: (agent) => this.available(agent),
+      unavailable: (model) => this.unavailable(model.source),
       onEvent: (event: OrchestratorEvent) => this.broadcast(event),
       mcpLaunch: (token) => ({ command: process.execPath, args: [MCP_BIN], env: { ...NODE_ENV_VARS, BATON_URL: this.baseUrl, BATON_TOKEN: token } }),
-      summarize: (prompt) => this.summarize(prompt),
     });
     this.tidier = new ContextTidier(ws, {
       model: () => this.tidyModel(),
@@ -188,18 +190,19 @@ export class AppState {
 
   // ---------- auth ----------
 
-  available(agent: AgentCard): boolean {
-    switch (agent.source) {
+  /** Why a route can't run right now, with where to fix it; undefined when it can. */
+  unavailable(source: CredentialSource): string | undefined {
+    switch (source) {
       case "demo":
-        return true;
+        return this.demo ? undefined : "演示模型只在演示工作区里可用";
       case "chatgpt":
-        return Boolean(this.auth.chatgpt);
+        return this.auth.chatgpt ? undefined : "还没有用 ChatGPT 登录，请到「模型」页登录";
       case "deepseek":
-        return this.auth.deepseek;
+        return this.auth.deepseek ? undefined : "还没有配置 DeepSeek API key，请到「模型」页填写";
       case "cursor":
-        return this.cursor.loggedIn;
+        return this.cursor.loggedIn ? undefined : this.cursor.installed ? "Cursor 还没有登录，请到「模型」页登录" : "没有找到 Cursor CLI，请到「模型」页查看安装方法";
       default:
-        return false;
+        return "不支持的账号来源";
     }
   }
 
@@ -344,37 +347,21 @@ export class AppState {
       .map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow }));
   }
 
-  /** The chat card for a model, created on first use so every model a route offers can be chatted with. */
-  async chatAgent(source: string, model: string): Promise<AgentCard> {
-    const route = CHAT_ROUTES[source as keyof typeof CHAT_ROUTES];
-    if (!route) throw new Error("只能选 ChatGPT、DeepSeek 或 Cursor 线路上的模型");
-    const models = source === "cursor" ? (await this.listCursorModels()).models : await this.listPiModels(route.provider as "openai" | "deepseek");
-    const found = models.find((m) => m.id === model);
-    if (!found) throw new Error(`${route.label}线路上没有模型 ${model}`);
-    const prefix = `chat-${source}-`;
-    const id = prefix + model.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64 - prefix.length);
-    const existing = this.ws.getAgent(id);
-    if (existing) {
-      if (!existing.enabled) this.ws.saveAgent({ ...existing, enabled: true });
-      return { ...existing, enabled: true };
-    }
-    const agent: AgentCard = {
-      id,
-      name: `对话 · ${found.name || model}`,
-      runtime: route.runtime,
-      source: source as AgentCard["source"],
-      provider: route.provider,
-      model,
-      roles: ["chat"],
-      permissions: { write: "ask", exec: "ask", network: "ask" },
-      costTier: route.costTier,
-      enabled: true,
-      body: "在对话里选中这个模型时自动创建，只担任对话角色，不参与接力。",
-    };
-    const routeError = validateAgentRoute(agent);
+  /** Every model a route offers; the demo models only exist in the demo workspace. */
+  async models(source: CredentialSource, force = false): Promise<{ models: ModelOption[]; error?: string }> {
+    if (source === "demo") return { models: this.demo ? DEMO_MODELS : [] };
+    if (source === "cursor") return this.listCursorModels(force);
+    return { models: await this.listPiModels(source === "chatgpt" ? "openai" : "deepseek") };
+  }
+
+  /** A model the user picked, checked against its route's live list ("one family, one route" included). */
+  async resolveModel(source: string, model: string): Promise<ChatModel> {
+    const routeError = validateModelRoute(source, model);
     if (routeError) throw new Error(routeError);
-    this.ws.saveAgent(agent);
-    return agent;
+    const route = source as CredentialSource;
+    const found = (await this.models(route)).models.find((m) => m.id === model);
+    if (!found) throw new Error(`${ROUTES[route].label} 线路上没有模型 ${model}`);
+    return { source: route, model, name: found.name || model };
   }
 
   private tidyModel(): TidyModel | undefined {
@@ -385,21 +372,5 @@ export class AppState {
       name: model,
       complete: (system, prompt) => this.pi.complete({ demo, provider: "deepseek", model, system, prompt }),
     };
-  }
-
-  private async summarize(prompt: string): Promise<string | undefined> {
-    if (!this.auth.deepseek) return undefined;
-    const runtime = await this.pi.runtime();
-    const model = runtime.getModel("deepseek", "deepseek-flash");
-    if (!model) return undefined;
-    const reply = await runtime.completeSimple(model, {
-      systemPrompt: "你负责把 agent 的输出整理成简短、只含事实的交接。",
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
-    });
-    const text = reply.content
-      .map((c) => (c.type === "text" ? c.text : ""))
-      .join("")
-      .trim();
-    return text || undefined;
   }
 }

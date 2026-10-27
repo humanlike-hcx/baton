@@ -1,47 +1,37 @@
-import type { AgentCard, Role, Stage, ThreadKind, ThreadStatus } from "./types";
+import type { ChatAccess, CredentialSource, Role, ThreadStatus } from "./types";
 
-export const STAGES: Stage[] = ["plan", "implement", "review", "done"];
-
-export const STAGE_LABEL: Record<Stage, string> = { plan: "方案", implement: "实现", review: "检查", done: "完成", chat: "对话" };
-export const ROLE_LABEL: Record<Role, string> = { plan: "方案", implement: "实现", review: "检查", advisor: "顾问", chat: "对话" };
+export const ROLE_LABEL: Record<Role, string> = { chat: "对话", review: "检查" };
 
 export const STATUS_LABEL: Record<ThreadStatus, string> = {
-  idle: "待开始",
-  running: "运行中",
-  waiting: "等你确认",
+  idle: "空闲",
+  running: "回复中",
+  waiting: "排队中",
   paused: "已暂停",
-  done: "已完成",
 };
-
-/** A chat thread that is not replying is simply waiting for the next message. */
-export function statusLabel(thread: { kind: ThreadKind; status: ThreadStatus }): string {
-  return thread.kind === "chat" && thread.status === "idle" ? "空闲" : STATUS_LABEL[thread.status];
-}
 
 export const STATUS_TONE: Record<ThreadStatus, string> = {
   idle: "bg-muted text-muted-foreground",
   running: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
   waiting: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   paused: "bg-zinc-500/15 text-zinc-700 dark:text-zinc-300",
-  done: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
 };
 
-export const STAGE_TONE: Record<Stage, string> = {
-  plan: "text-violet-600 dark:text-violet-300",
-  implement: "text-sky-600 dark:text-sky-300",
-  review: "text-amber-600 dark:text-amber-300",
-  done: "text-emerald-600 dark:text-emerald-300",
-  chat: "text-foreground",
-};
+export const ACCESS: { value: ChatAccess; label: string; hint: string }[] = [
+  { value: "read", label: "只读", hint: "只能读文件、读上下文、查和写记忆，不能改文件、不能执行命令" },
+  { value: "ask", label: "每次问我", hint: "改文件、执行命令前都先问你" },
+  { value: "allow", label: "允许直接改", hint: "直接改文件和执行命令；危险命令黑名单和禁止访问的路径照常生效" },
+];
 
-export const SOURCE_LABEL: Record<AgentCard["source"], string> = {
-  chatgpt: "ChatGPT 登录",
-  deepseek: "DeepSeek key",
-  cursor: "Cursor 登录",
+export const ACCESS_LABEL: Record<ChatAccess, string> = { read: "只读", ask: "每次问我", allow: "允许直接改" };
+
+export const SOURCE_LABEL: Record<CredentialSource, string> = {
+  chatgpt: "ChatGPT",
+  deepseek: "DeepSeek",
+  cursor: "Cursor",
   demo: "演示",
 };
 
-export const RUNTIME_LABEL: Record<AgentCard["runtime"], string> = { pi: "Pi", cursor: "Cursor Agent" };
+export const RUNTIME_LABEL: Record<string, string> = { pi: "Pi", cursor: "Cursor Agent" };
 
 export function kb(bytes: number): string {
   return bytes < 1024 ? `${bytes}B` : `${(bytes / 1024).toFixed(1)}KB`;

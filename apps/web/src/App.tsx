@@ -1,11 +1,10 @@
-import { AgentsPage } from "@/components/agents-page";
 import { AppShell } from "@/components/app-shell";
 import { ContextPage } from "@/components/context-page";
-import { NewThread } from "@/components/new-thread";
+import { ModelsPage } from "@/components/models-page";
+import { NewChat } from "@/components/new-chat";
 import { SettingsPage } from "@/components/settings-page";
 import { StatsPage } from "@/components/stats-page";
 import { ThreadView } from "@/components/thread-view";
-import { ThreadsHome } from "@/components/threads-home";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useRoute, type Route } from "@/lib/router";
@@ -14,11 +13,9 @@ import { BatonProvider } from "@/lib/store";
 function Page({ route }: { route: Route }) {
   switch (route.page) {
     case "threads":
-      return route.threadId ? <ThreadView key={route.threadId} threadId={route.threadId} /> : <ThreadsHome />;
-    case "new":
-      return <NewThread />;
-    case "agents":
-      return <AgentsPage />;
+      return route.threadId ? <ThreadView key={route.threadId} threadId={route.threadId} /> : <NewChat />;
+    case "models":
+      return <ModelsPage />;
     case "context":
       return <ContextPage tab={route.tab} />;
     case "stats":

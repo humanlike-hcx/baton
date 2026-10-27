@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { canWrite, shellPolicy } from "../permissions.ts";
 import type { Risk } from "../types.ts";
-import { HANDOFF_REMINDER, expectsHandoff, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
+import { VERDICT_REMINDER, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
 
 type Json = Record<string, any>;
 
@@ -143,7 +143,7 @@ export class AcpExecutor implements Executor {
       stdio: ["pipe", "pipe", "pipe"],
     });
     const conn = new AcpConnection(child);
-    const readOnly = !canWrite(agent.permissions) || req.role === "review" || req.role === "advisor" || req.role === "plan";
+    const readOnly = !canWrite(agent.permissions) || req.role === "review";
     let finalText = "";
     let currentText = "";
     const toolTitles = new Map<string, string>();
@@ -258,9 +258,9 @@ export class AcpExecutor implements Executor {
         currentText = "";
         req.emit({ type: "text_end" });
       }
-      if (result.stopReason === "end_turn" && !req.hasHandoff() && expectsHandoff(req.role) && !req.signal.aborted) {
-        req.emit({ type: "notice", level: "warn", text: "运行没有写交接，追加一次提醒。" });
-        await conn.request("session/prompt", { sessionId, prompt: [{ type: "text", text: HANDOFF_REMINDER }] });
+      if (result.stopReason === "end_turn" && req.role === "review" && !req.hasVerdict() && !req.signal.aborted) {
+        req.emit({ type: "notice", level: "warn", text: "检查没有给出结论，追加一次提醒。" });
+        await conn.request("session/prompt", { sessionId, prompt: [{ type: "text", text: VERDICT_REMINDER }] });
         if (currentText) {
           finalText = currentText;
           req.emit({ type: "text_end" });

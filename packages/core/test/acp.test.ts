@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { cursorLogin, cursorModels, cursorStatus, parseCursorModels } from "../src/cursor-cli.ts";
 import { filterCursorModels } from "../src/families.ts";
-import { MOCK_ACP, demoSetup, waitForSettled } from "./helpers.ts";
+import { CURSOR_COMPOSER, CURSOR_SONNET, DEMO_CHAT, MOCK_ACP, demoSetup, waitFor, waitForSettled } from "./helpers.ts";
 
 const mockCommand = `node ${MOCK_ACP}`;
 
@@ -30,28 +30,32 @@ describe("Cursor CLI helpers", () => {
 });
 
 describe("ACP executor with a mock Cursor agent", () => {
-  it("routes permission requests to approvals, records changed files and auto-writes the missing handoff", async () => {
+  it("routes permission requests to approvals and records changed files once writes are open", async () => {
     const { orch, root } = demoSetup({
       mutate: (ws) => {
         const s = ws.settings();
         s.cursor.command = mockCommand;
         ws.saveSettings(s);
-        for (const a of ws.listAgents()) if (a.source === "demo" && a.roles.includes("implement")) ws.saveAgent({ ...a, enabled: false });
       },
     });
-    const thread = orch.createThread({ title: "Cursor 实现", task: "让 Cursor 写文件", acceptance: ["notes 下有文件"], stage: "implement", agentId: "coder-cursor-composer" });
-    const t = await waitForSettled(orch, thread.id);
-    const run = t.runs[0]!;
-    expect(run.agentId).toBe("coder-cursor-composer");
-    expect(run.status).toBe("succeeded");
+    const thread = orch.createThread({ task: "开个头", model: CURSOR_COMPOSER });
+    let t = await waitForSettled(orch, thread.id);
+    expect(t.runs[0]!.changedFiles).toEqual([]);
+    expect(fs.existsSync(path.join(root, "notes"))).toBe(false);
+
+    orch.setAccess(thread.id, "ask");
+    orch.postMessage(thread.id, "让 Cursor 写文件");
+    await waitFor(() => orch.getThread(thread.id)!.runs.length === 2, 20_000, "second run");
+    t = await waitForSettled(orch, thread.id);
+    const run = t.runs[1]!;
+    expect(run).toMatchObject({ agentId: "cursor:composer-2.5", runtime: "cursor", status: "succeeded" });
     expect(run.changedFiles).toEqual(["notes/cursor-composer-2.5.md"]);
     expect(fs.existsSync(path.join(root, "notes/cursor-composer-2.5.md"))).toBe(true);
-    expect(run.handoff?.auto).toBe(true);
     expect(t.items.some((i) => i.kind === "approval" && i.preview === "find notes -type f" && i.status === "allowed")).toBe(true);
     expect(t.items.some((i) => i.kind === "text" && i.text.includes("模拟 Cursor"))).toBe(true);
   });
 
-  it("keeps read-only roles from editing (ask mode + rejected edits)", async () => {
+  it("keeps a reviewer from editing (ask mode) and reminds it once when it gives no verdict", async () => {
     const { orch, root } = demoSetup({
       mutate: (ws) => {
         const s = ws.settings();
@@ -59,10 +63,20 @@ describe("ACP executor with a mock Cursor agent", () => {
         ws.saveSettings(s);
       },
     });
-    const thread = orch.createThread({ title: "Cursor 检查", task: "检查", acceptance: ["无"], stage: "review", agentId: "reviewer-cursor-sonnet" });
-    const t = await waitForSettled(orch, thread.id);
-    expect(t.runs[0]!.agentId).toBe("reviewer-cursor-sonnet");
-    expect(t.runs[0]!.changedFiles).toEqual([]);
-    expect(fs.existsSync(path.join(root, "notes"))).toBe(false);
+    const thread = orch.createThread({ task: "开个头", model: DEMO_CHAT });
+    await waitForSettled(orch, thread.id);
+    orch.setAccess(thread.id, "allow");
+    orch.postMessage(thread.id, "写文件：notes/x.md");
+    await waitFor(() => orch.getThread(thread.id)!.runs.length === 2, 20_000, "second run");
+    await waitForSettled(orch, thread.id);
+
+    const review = (await orch.review(thread.id, CURSOR_SONNET))!;
+    expect(review).toMatchObject({ agentId: "cursor:claude-sonnet-5-5-medium", role: "review", changedFiles: [] });
+    expect(fs.existsSync(path.join(root, "notes/cursor-claude-sonnet-5-5-medium.md"))).toBe(false);
+    // No MCP bridge in a bare orchestrator, so the mock cannot call submit_review.
+    expect(review.review).toBeUndefined();
+    const t = orch.getThread(thread.id)!;
+    expect(t.items.some((i) => i.kind === "notice" && i.text.includes("追加一次提醒"))).toBe(true);
+    expect(t.items.some((i) => i.kind === "notice" && i.text.includes("没有给出检查结论"))).toBe(true);
   });
 });

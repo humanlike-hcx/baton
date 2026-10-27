@@ -8,19 +8,17 @@ import { applyChunks, parsePatch } from "./patch.ts";
 import { PermissionError, canWrite, matchesDeny, resolveWorkspacePath, shellPolicy } from "./permissions.ts";
 import { formatShellResult, runShell } from "./shell.ts";
 import { CONTEXT_MAX_BYTES } from "./tidy.ts";
-import type { AgentCard, Handoff, Risk, Role, Stage } from "./types.ts";
+import type { ReviewVerdict, Risk, Role, RunAgent } from "./types.ts";
 import { byteLength, globToRegExp, truncateMiddle } from "./util.ts";
 import type { Workspace } from "./workspace.ts";
 
 export interface ToolContext {
   ws: Workspace;
-  agent: AgentCard;
-  run: { id: string; threadId: string; stage: Stage; role: Role };
+  agent: RunAgent;
+  run: { id: string; threadId: string; role: Role };
   signal?: AbortSignal;
   requestApproval(req: { risk: Risk; title: string; preview: string }): Promise<boolean>;
-  onHandoff(h: Omit<Handoff, "runId" | "threadId" | "agentId" | "stage" | "createdAt" | "auto">): void;
-  onHandoffTo(p: { stage: Stage; reason: string; acceptance: string[] }): void;
-  onDecision(): void;
+  onReview(verdict: ReviewVerdict): void;
   onFileWrite(rel: string): void;
 }
 
@@ -331,7 +329,7 @@ export const shellTool: ToolSpec = {
     if (decision.policy === "deny") return fail(`命令被拒绝：${decision.reason}`);
     if (decision.policy === "ask") {
       const allowed = await ctx.requestApproval({ risk: "exec", title: "执行命令", preview: p.command });
-      if (!allowed) return fail("用户拒绝了这条命令。换一种做法，或在交接里说明需要执行什么。");
+      if (!allowed) return fail("用户拒绝了这条命令。换一种做法，或向用户说明需要执行什么。");
     }
     const timeoutMs = Math.min(600, Math.max(1, p.timeout_sec ?? 120)) * 1000;
     const result = await runShell(p.command, { cwd: ctx.ws.root, timeoutMs, signal: ctx.signal });
@@ -358,13 +356,12 @@ export const readContextTool: ToolSpec = {
 export const updateContextTool: ToolSpec = {
   name: "update_context",
   label: "改上下文",
-  description: "整体替换房间上下文 CONTEXT.md。只写长期有效的目标、约束、当前状态；临时细节放交接，事实放记忆。上限 8KB。",
+  description: "整体替换房间上下文 CONTEXT.md。只写长期有效的目标、约束、当前状态；事实和细节放记忆。上限 8KB。",
   parameters: Type.Object({ content: Type.String({ description: "完整的新内容（Markdown）" }) }),
   risk: "memory",
   async execute(p: { content: string }, ctx) {
     if (byteLength(p.content) > CONTEXT_MAX_BYTES) return fail(`上下文超过 ${CONTEXT_MAX_BYTES} 字节，请合并重复内容，把细节移进记忆`);
     ctx.ws.writeContext(p.content);
-    ctx.onDecision();
     return ok("房间上下文已更新");
   },
 };
@@ -398,7 +395,6 @@ export const rememberTool: ToolSpec = {
     const result = remember(ctx.ws, { text: p.text, kind: p.kind, supersedes: p.supersedes, author: ctx.agent.id, run: ctx.run.id });
     const similar = result.similar.length ? `\n相近条目：\n${result.similar.map((m) => `[${m.id}] ${m.text}`).join("\n")}` : "";
     if (!result.ok) return fail(`没有写入：${result.reason}${similar}`);
-    if (result.entry.kind === "decision") ctx.onDecision();
     return ok(`已记住 [${result.entry.id}]${similar}`);
   },
 };
@@ -419,53 +415,23 @@ export const recordLessonTool: ToolSpec = {
   },
 };
 
-export const writeHandoffTool: ToolSpec = {
-  name: "write_handoff",
-  label: "写交接",
-  description: "结束前写交接：做了什么、改了哪些文件、还剩什么、建议下一步。检查角色必须给出 verdict（pass / fail），fail 时在 issues 里逐条列问题。",
+export const submitReviewTool: ToolSpec = {
+  name: "submit_review",
+  label: "给出检查结论",
+  description: "检查结束前调用一次：没有问题写 pass，否则写 fail，并在 issues 里逐条列出问题（文件、位置、原因）。检查命令失败时不能写 pass。",
   parameters: Type.Object({
-    done: Type.String({ description: "做了什么（事实）" }),
-    files: Type.Optional(Type.Array(Type.String(), { description: "改动的文件" })),
-    remaining: Type.Optional(Type.String({ description: "还剩什么、风险" })),
-    next: Type.Optional(Type.String({ description: "建议下一步" })),
-    verdict: Type.Optional(Type.Union([Type.Literal("pass"), Type.Literal("fail")])),
+    verdict: Type.Union([Type.Literal("pass"), Type.Literal("fail")]),
     issues: Type.Optional(Type.Array(Type.String())),
   }),
   risk: "memory",
   mcp: true,
-  async execute(
-    p: { done: string; files?: string[]; remaining?: string; next?: string; verdict?: "pass" | "fail"; issues?: string[] },
-    ctx,
-  ) {
-    if (!p.done?.trim()) return fail("done 不能为空");
-    if (ctx.run.role === "review" && !p.verdict) return fail("检查角色必须给出 verdict：pass 或 fail");
-    if (p.verdict === "fail" && !p.issues?.length) return fail("verdict 为 fail 时必须在 issues 里列出问题");
-    ctx.onHandoff({
-      done: p.done.trim(),
-      files: p.files ?? [],
-      remaining: p.remaining?.trim() ?? "",
-      next: p.next?.trim() ?? "",
-      verdict: ctx.run.role === "review" ? p.verdict : undefined,
-      issues: p.issues,
-    });
-    return ok("交接已记录");
-  },
-};
-
-export const handoffToTool: ToolSpec = {
-  name: "handoff_to",
-  label: "提议接力",
-  description: "提议线程进入下一个阶段（implement 或 review），由工作台挑选 agent。必须附上可检验的验收标准。",
-  parameters: Type.Object({
-    stage: Type.Union([Type.Literal("implement"), Type.Literal("review")]),
-    reason: Type.String(),
-    acceptance: Type.Array(Type.String(), { minItems: 1 }),
-  }),
-  risk: "memory",
-  async execute(p: { stage: Stage; reason: string; acceptance: string[] }, ctx) {
-    if (!p.acceptance?.filter((a) => a.trim()).length) return fail("必须附上验收标准");
-    ctx.onHandoffTo({ stage: p.stage, reason: p.reason, acceptance: p.acceptance.map((a) => a.trim()).filter(Boolean) });
-    return ok(`已提议进入 ${p.stage} 阶段。请继续写交接（write_handoff），然后结束。`);
+  async execute(p: { verdict: "pass" | "fail"; issues?: string[] }, ctx) {
+    if (ctx.run.role !== "review") return fail("只有检查运行可以给出检查结论");
+    if (p.verdict !== "pass" && p.verdict !== "fail") return fail("verdict 只能是 pass 或 fail");
+    const issues = (p.issues ?? []).map((i) => i.trim()).filter(Boolean);
+    if (p.verdict === "fail" && !issues.length) return fail("verdict 为 fail 时必须在 issues 里列出问题");
+    ctx.onReview({ verdict: p.verdict, issues });
+    return ok("检查结论已记录");
   },
 };
 
@@ -482,23 +448,19 @@ export const ALL_TOOLS: ToolSpec[] = [
   memorySearchTool,
   rememberTool,
   recordLessonTool,
-  writeHandoffTool,
-  handoffToTool,
+  submitReviewTool,
 ];
 
 export const MCP_TOOLS = ALL_TOOLS.filter((t) => t.mcp);
 
 const ROLE_TOOLS: Record<Role, string[]> = {
-  plan: ["read_file", "list_files", "search", "read_context", "update_context", "memory_search", "remember", "record_lesson", "write_handoff", "handoff_to"],
-  implement: ["read_file", "list_files", "search", "edit", "write_file", "shell", "read_context", "update_context", "memory_search", "remember", "record_lesson", "write_handoff"],
-  review: ["read_file", "list_files", "search", "shell", "read_context", "memory_search", "remember", "record_lesson", "write_handoff"],
-  advisor: ["read_file", "list_files", "search", "read_context", "memory_search"],
-  // Write and exec tools drop out unless the user opened writes for the thread (see chatPermissions).
-  chat: ["read_file", "list_files", "search", "edit", "write_file", "shell", "read_context", "memory_search", "remember", "record_lesson"],
+  // Write and exec tools drop out unless the chat's access level allows them.
+  chat: ["read_file", "list_files", "search", "edit", "write_file", "shell", "read_context", "update_context", "memory_search", "remember", "record_lesson"],
+  review: ["read_file", "list_files", "search", "read_context", "memory_search", "record_lesson", "submit_review"],
 };
 
 /** Tools offered to a native (Pi) run: by role, capped by the agent's permissions, edit format by family. */
-export function toolsFor(agent: AgentCard, role: Role): ToolSpec[] {
+export function toolsFor(agent: RunAgent, role: Role): ToolSpec[] {
   const family = modelFamily(agent.model, agent.provider);
   return ROLE_TOOLS[role]
     .map((name) => (name === "edit" ? (family === "gpt" ? "apply_patch" : "edit_file") : name))
@@ -518,7 +480,7 @@ export async function runTool(tool: ToolSpec, params: unknown, ctx: ToolContext)
       const preview = tool.preview ? tool.preview(params ?? {}, ctx) : summarizeArgs(params, 4000);
       const allowed = await ctx.requestApproval({ risk: "write", title: p.path ? `改文件：${p.path}` : "改文件", preview });
       ctx.ws.audit({ run: ctx.run.id, agent: ctx.agent.id, tool: tool.name, risk: tool.risk, params: summarizeArgs(params), approved: allowed });
-      if (!allowed) return fail("用户拒绝了这次改动。换一种做法，或在交接里说明想改什么。");
+      if (!allowed) return fail("用户拒绝了这次改动。换一种做法，或向用户说明想改什么。");
     }
     const out = await tool.execute(params ?? {}, ctx);
     ctx.ws.audit({ run: ctx.run.id, agent: ctx.agent.id, tool: tool.name, risk: tool.risk, params: summarizeArgs(params), ok: !out.isError });

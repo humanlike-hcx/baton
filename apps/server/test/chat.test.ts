@@ -1,88 +1,111 @@
 import fs from "node:fs";
 import path from "node:path";
-import { selectAgent, type AgentCard, type Thread, type TimelineItem } from "@baton/core";
+import type { Thread, TimelineItem } from "@baton/core";
 import { describe, expect, it } from "vitest";
-import { testServer } from "./helpers.ts";
+import { CURSOR_COMPOSER, CURSOR_SONNET, DEMO_CHAT, DEMO_REVIEW, testServer } from "./helpers.ts";
 
 type Server = Awaited<ReturnType<typeof testServer>>;
+type Approval = Extract<TimelineItem, { kind: "approval" }>;
 
 const replies = (t: Thread) => t.items.filter((i): i is Extract<TimelineItem, { kind: "text" }> => i.kind === "text" && !i.thinking).map((i) => i.text);
 const tools = (t: Thread, name: string) => t.items.filter((i): i is Extract<TimelineItem, { kind: "tool" }> => i.kind === "tool" && i.tool === name);
+const pendingApproval = (t: Thread) => t.items.find((i): i is Approval => i.kind === "approval" && i.status === "pending");
 const briefing = (s: Server, runId: string) => fs.readFileSync(path.join(s.root, ".baton/sessions/briefings", `${runId}.md`), "utf8");
 
-async function say(s: Server, threadId: string, text: string, agentId?: string): Promise<Thread> {
-  const before = (await s.thread(threadId)).runs.length;
-  await s.post(`/api/threads/${threadId}/messages`, { text, agentId });
-  return s.waitForThread(threadId, (t) => t.runs.length > before && t.status !== "running", "chat reply");
-}
-
-describe("chat threads: start a conversation (US-17)", () => {
-  it("creates a chat thread without acceptance criteria and answers the first message", async () => {
+describe("chats: start a conversation (US-17)", () => {
+  it("opens a chat on a model and answers the first message, no acceptance criteria needed", async () => {
     const s = await testServer();
-    const created = await s.post<Thread>("/api/threads", { kind: "chat", task: "这个仓库的目录结构是怎样的？", agentId: "demo-planner" });
-    expect(created.kind).toBe("chat");
-    expect(created.acceptance).toEqual([]);
-    expect(created.title).toBe("这个仓库的目录结构是怎样的？");
+    const created = await s.post<Thread>("/api/threads", { task: "这个仓库的目录结构是怎样的？", ...DEMO_CHAT });
+    expect(created).toMatchObject({ title: "这个仓库的目录结构是怎样的？", access: "read", model: { source: "demo", model: "demo-chat", name: "对话" } });
 
     const t = await s.settled(created.id);
     expect(t.status).toBe("idle");
     expect(t.runs).toHaveLength(1);
-    expect(t.runs[0]).toMatchObject({ role: "chat", stage: "chat", agentId: "demo-planner", status: "succeeded", prompt: "这个仓库的目录结构是怎样的？" });
+    expect(t.runs[0]).toMatchObject({ role: "chat", agentId: "demo:demo-chat", source: "demo", model: "demo-chat", status: "succeeded", prompt: "这个仓库的目录结构是怎样的？" });
     expect(replies(t).join("")).toContain("收到");
-    expect(t.items.some((i) => i.kind === "handoff" || i.kind === "decision")).toBe(false);
-    expect(t.runs[0]!.handoff?.done).toContain("这个仓库的目录结构");
 
-    const list = await s.get<{ id: string; kind: string }[]>("/api/threads");
-    expect(list.find((x) => x.id === t.id)?.kind).toBe("chat");
+    const list = await s.get<{ id: string; model: { model: string } }[]>("/api/threads");
+    expect(list.find((x) => x.id === t.id)?.model.model).toBe("demo-chat");
   });
 
-  it("requires an agent, and keeps relay threads strict", async () => {
+  it("opens an empty chat without running anything", async () => {
     const s = await testServer();
-    expect((await s.request("POST", "/api/threads", { kind: "chat", task: "hi" })).status).toBe(400);
-    expect((await s.request("POST", "/api/threads", { kind: "chat", task: "hi", agentId: "nope" })).status).toBe(400);
-    expect((await s.request("POST", "/api/threads", { kind: "board", title: "x", acceptance: ["y"] })).status).toBe(400);
-    expect((await s.request("POST", "/api/threads", { title: "接力", task: "x" })).status).toBe(400);
-  });
-
-  it("refuses to answer with a disabled agent and says why", async () => {
-    const s = await testServer();
-    const agent = (await s.get<{ id: string }[]>("/api/agents")).find((a) => a.id === "demo-reviewer")!;
-    await s.put("/api/agents/demo-reviewer", { ...agent, enabled: false });
-    const created = await s.post<Thread>("/api/threads", { kind: "chat", task: "在吗", agentId: "demo-reviewer" });
-    const t = await s.waitForThread(created.id, (x) => x.status === "paused", "refusal");
-    expect(t.runs).toHaveLength(0);
-    expect(t.items.some((i) => i.kind === "notice" && i.text.includes("已停用"))).toBe(true);
+    const created = await s.post<Thread>("/api/threads", { ...DEMO_CHAT });
+    expect(created).toMatchObject({ title: "新对话", runs: [], status: "idle" });
   });
 });
 
-describe("chat threads: switch agents mid-conversation (US-18)", () => {
-  it("hands the conversation to another agent and another runtime", async () => {
+describe("chats: pick any model a signed-in account offers (US-92)", () => {
+  it("only accepts models the route lists, one family per route, and records only account + model", async () => {
     const s = await testServer();
-    const created = await s.post<Thread>("/api/threads", { kind: "chat", task: "我们在讨论周报模板的格式", agentId: "demo-planner" });
+    const cases: [Record<string, string>, string][] = [
+      [{}, "不支持的账号来源"],
+      [{ source: "openrouter", model: "x" }, "不支持的账号来源"],
+      [{ source: "cursor", model: "gpt-5.6-sol" }, "GPT 系模型只走 ChatGPT"],
+      [{ source: "cursor", model: "auto" }, "不提供 Auto"],
+      [{ source: "cursor", model: "deepseek-v41-flash-1017-medium" }, "DeepSeek 系模型只走 DeepSeek key"],
+      [{ source: "chatgpt", model: "claude-sonnet-5-5-medium" }, "只能使用 GPT 系模型"],
+      [{ source: "deepseek", model: "gpt-5.5" }, "只能使用 DeepSeek 模型"],
+      [{ source: "cursor", model: "no-such-model" }, "Cursor 线路上没有模型 no-such-model"],
+      [{ source: "demo", model: "demo-plan" }, "没有模型 demo-plan"],
+    ];
+    for (const [pick, reason] of cases) {
+      const res = await s.request("POST", "/api/threads", { task: "hi", ...pick });
+      expect(res.status, JSON.stringify(pick)).toBe(400);
+      expect(res.body.error).toContain(reason);
+    }
+    expect(await s.get("/api/threads")).toEqual([]);
+
+    const created = await s.post<Thread>("/api/threads", { task: "看看 notes 目录", source: "cursor", model: "gemini-4-argon-medium" });
+    const t = await s.settled(created.id);
+    expect(t.model).toEqual({ source: "cursor", model: "gemini-4-argon-medium", name: "Gemini 4 Argon Medium" });
+    expect(t.runs[0]).toMatchObject({ agentId: "cursor:gemini-4-argon-medium", runtime: "cursor", source: "cursor", family: "gemini", status: "succeeded" });
+    expect(fs.existsSync(path.join(s.root, ".baton/agents"))).toBe(false);
+  });
+
+  it("refuses a model whose account is not signed in, and says where to sign in", async () => {
+    const s = await testServer();
+    const models = await s.get<{ routes: { source: string; unavailable?: string; models: { id: string }[] }[] }>("/api/models");
+    const deepseek = models.routes.find((r) => r.source === "deepseek")!;
+    expect(deepseek.unavailable).toContain("DeepSeek API key");
+    const created = await s.post<Thread>("/api/threads", { task: "在吗", source: "deepseek", model: deepseek.models[0]!.id });
+    const t = await s.waitForThread(created.id, (x) => x.status === "paused", "refusal");
+    expect(t.runs).toHaveLength(0);
+    expect(t.items.some((i) => i.kind === "notice" && i.text.includes("现在不能回复") && i.text.includes("「模型」页"))).toBe(true);
+  });
+});
+
+describe("chats: switch models mid-conversation (US-18)", () => {
+  it("hands the conversation to another model and another runtime", async () => {
+    const s = await testServer();
+    const created = await s.post<Thread>("/api/threads", { task: "我们在讨论周报模板的格式", ...DEMO_CHAT });
     await s.settled(created.id);
 
-    let t = await say(s, created.id, "换你来接着说", "demo-reviewer");
-    expect(t.pinnedAgents.chat).toBe("demo-reviewer");
-    expect(t.runs[1]!.agentId).toBe("demo-reviewer");
+    let t = await s.say(created.id, "换你来接着说", DEMO_REVIEW);
+    expect(t.model?.model).toBe("demo-review");
+    expect(t.runs[1]!.agentId).toBe("demo:demo-review");
     expect(replies(t).at(-1)).toContain("上一轮用户说「我们在讨论周报模板的格式」");
-    expect(t.items.some((i) => i.kind === "notice" && i.text.includes("换成 演示 · 检查 接着聊"))).toBe(true);
+    expect(t.items.some((i) => i.kind === "notice" && i.text.includes("换成 检查 · 演示 接着聊（之前是 对话 · 演示）"))).toBe(true);
 
-    t = await say(s, created.id, "Cursor 也来看看", "reviewer-cursor-sonnet");
+    t = await s.say(created.id, "Cursor 也来看看", CURSOR_SONNET);
     const cursorRun = t.runs[2]!;
-    expect(cursorRun).toMatchObject({ agentId: "reviewer-cursor-sonnet", runtime: "cursor", status: "succeeded" });
+    expect(cursorRun).toMatchObject({ agentId: "cursor:claude-sonnet-5-5-medium", runtime: "cursor", status: "succeeded" });
     const seen = briefing(s, cursorRun.id);
     expect(seen).toContain("## 最近几轮原文");
     expect(seen).toContain("我们在讨论周报模板的格式");
     expect(seen).toContain("换你来接着说");
     expect(seen).toContain("上一轮用户说「我们在讨论周报模板的格式」");
     expect(seen).toContain("角色：对话");
+
+    t = await s.say(created.id, "还是你来");
+    expect(t.runs[3]!.agentId).toBe("cursor:claude-sonnet-5-5-medium");
   });
 
   it("quotes the last few turns verbatim and rolls older ones into a summary", async () => {
     const s = await testServer();
-    const created = await s.post<Thread>("/api/threads", { kind: "chat", task: "第1条：最早的话题", agentId: "demo-planner" });
+    const created = await s.post<Thread>("/api/threads", { task: "第1条：最早的话题", ...DEMO_CHAT });
     await s.settled(created.id);
-    for (let i = 2; i <= 5; i++) await say(s, created.id, `第${i}条消息`);
+    for (let i = 2; i <= 5; i++) await s.say(created.id, `第${i}条消息`);
 
     const t = await s.thread(created.id);
     expect(t.runs).toHaveLength(5);
@@ -96,159 +119,147 @@ describe("chat threads: switch agents mid-conversation (US-18)", () => {
     expect(recent).toContain("第4条消息");
     expect(recent).not.toContain("### 用户\n第1条：最早的话题");
 
-    const preview = await s.get<{ text: string }>(`/api/agents/demo-reviewer/briefing?role=chat&thread=${t.id}`);
+    const preview = await s.get<{ text: string }>(`/api/briefing?source=demo&model=demo-review&role=chat&thread=${t.id}`);
     expect(preview.text).toContain("第5条消息");
     expect(preview.text).toContain("第1条：最早的话题");
   });
 
-  it("queues a message sent while the agent is still replying and answers it next", async () => {
+  it("queues a message sent while the model is still replying and answers it next", async () => {
     const s = await testServer({ autoApprove: false });
-    const created = await s.post<Thread>("/api/threads", { kind: "chat", agentId: "demo-coder" });
-    await s.post(`/api/threads/${created.id}/write`, { allow: true });
-    await s.post(`/api/threads/${created.id}/messages`, { text: "写文件：notes/a.md" });
-    const blocked = await s.waitForThread(created.id, (t) => t.items.some((i) => i.kind === "approval" && i.status === "pending"), "command approval");
+    const created = await s.chat("写文件：notes/a.md", { access: "ask" });
+    let blocked = await s.waitForThread(created.id, (t) => Boolean(pendingApproval(t)), "write approval");
     await s.post(`/api/threads/${created.id}/messages`, { text: "顺便说一下，第二条" });
-    const approval = blocked.items.find((i) => i.kind === "approval" && i.status === "pending");
-    if (approval?.kind !== "approval") throw new Error("no approval");
-    await s.post(`/api/approvals/${approval.approvalId}`, { allow: true });
+    await s.post(`/api/approvals/${pendingApproval(blocked)!.approvalId}`, { allow: true });
+    blocked = await s.waitForThread(created.id, (t) => t.items.filter((i) => i.kind === "approval").length === 2 && Boolean(pendingApproval(t)), "command approval");
+    await s.post(`/api/approvals/${pendingApproval(blocked)!.approvalId}`, { allow: true });
 
     const t = await s.waitForThread(created.id, (x) => x.runs.length === 2 && x.status === "idle", "second reply");
     expect(t.runs.map((r) => r.prompt)).toEqual(["写文件：notes/a.md", "顺便说一下，第二条"]);
+    expect(briefing(s, t.runs[0]!.id)).not.toContain("顺便说一下，第二条");
+    expect(briefing(s, t.runs[1]!.id)).toContain("顺便说一下，第二条");
     expect(t.notes).toEqual([]);
   });
 });
 
-describe("chat threads: read-only by default, writes opened per thread (US-19)", () => {
-  it("cannot write until writes are opened, then snapshots and can roll back", async () => {
-    const s = await testServer();
-    const created = await s.post<Thread>("/api/threads", { kind: "chat", task: "写文件：notes/chat.md", agentId: "demo-coder" });
+describe("chats: one access switch per chat (US-93, US-19)", () => {
+  it("is read-only by default, asks before each change at「每次问我」, and snapshots so a reply can be rolled back", async () => {
+    const s = await testServer({ autoApprove: false });
+    const created = await s.chat("写文件：notes/chat.md");
     let t = await s.settled(created.id);
     expect(fs.existsSync(path.join(s.root, "notes/chat.md"))).toBe(false);
     expect(t.runs[0]!.changedFiles).toEqual([]);
     expect(tools(t, "write_file").every((i) => i.status !== "ok")).toBe(true);
-    expect(fs.readFileSync(path.join(s.root, ".baton/sessions/briefings", `${t.runs[0]!.id}.md`), "utf8")).toContain("写权限：只读");
+    expect(briefing(s, t.runs[0]!.id)).toContain("权限：只读");
 
-    await s.post(`/api/threads/${t.id}/write`, { allow: true });
-    t = await say(s, t.id, "写文件：notes/chat.md");
+    await s.post(`/api/threads/${t.id}/access`, { access: "ask" });
+    expect((await s.thread(t.id)).items.at(-1)).toMatchObject({ kind: "notice", text: expect.stringContaining("每次问我") });
+    await s.post(`/api/threads/${t.id}/messages`, { text: "写文件：notes/chat.md" });
+    const blocked = await s.waitForThread(t.id, (x) => Boolean(pendingApproval(x)), "write approval");
+    const approval = pendingApproval(blocked)!;
+    expect(approval).toMatchObject({ risk: "write", title: "改文件：notes/chat.md" });
+    expect(approval.preview).toMatch(/^新建 notes\/chat\.md\n\+# 对话里写的文件/);
+    await s.post(`/api/approvals/${approval.approvalId}`, { allow: true });
+    const command = await s.waitForThread(t.id, (x) => pendingApproval(x)?.risk === "exec", "command approval");
+    expect(pendingApproval(command)!.preview).toBe("wc -l notes/chat.md");
+    await s.post(`/api/approvals/${pendingApproval(command)!.approvalId}`, { allow: false });
+    t = await s.settled(t.id);
     const run = t.runs[1]!;
-    expect(run.status).toBe("succeeded");
-    expect(run.changedFiles).toEqual(["notes/chat.md"]);
+    expect(run).toMatchObject({ status: "succeeded", changedFiles: ["notes/chat.md"] });
     expect(run.snapshotBefore).toBeTruthy();
-    expect(fs.existsSync(path.join(s.root, "notes/chat.md"))).toBe(true);
-    expect(t.items.some((i) => i.kind === "approval" && i.preview === "wc -l notes/chat.md" && i.status === "allowed")).toBe(true);
+    expect(briefing(s, run.id)).toContain("权限：每次问我");
+    expect(tools(t, "shell").at(-1)).toMatchObject({ runId: run.id, status: "denied" });
 
     const { diff } = await s.get<{ diff: string }>(`/api/runs/${run.id}/diff`);
     expect(diff).toContain("notes/chat.md");
     await s.post(`/api/runs/${run.id}/rollback`);
     expect(fs.existsSync(path.join(s.root, "notes/chat.md"))).toBe(false);
 
-    await s.post(`/api/threads/${t.id}/write`, { allow: false });
-    t = await say(s, t.id, "写文件：notes/again.md");
+    await s.post(`/api/threads/${t.id}/access`, { access: "read" });
+    t = await s.say(t.id, "写文件：notes/again.md");
     expect(fs.existsSync(path.join(s.root, "notes/again.md"))).toBe(false);
+    expect((await s.request("POST", `/api/threads/${t.id}/access`, { access: "root" })).status).toBe(400);
   });
 
-  it("only opens writes for that thread, never beyond the agent's own card, and not after a restart", async () => {
+  it("changes files and runs commands without asking at「允许直接改」", async () => {
+    const s = await testServer({ autoApprove: false });
+    const created = await s.chat("写文件：notes/direct.md", { access: "allow" });
+    const t = await s.settled(created.id);
+    expect(t.runs[0]).toMatchObject({ status: "succeeded", changedFiles: ["notes/direct.md"] });
+    expect(t.items.some((i) => i.kind === "approval")).toBe(false);
+    expect(tools(t, "shell")[0]).toMatchObject({ status: "ok" });
+    expect(briefing(s, t.runs[0]!.id)).toContain("权限：允许直接改");
+  });
+
+  it("only applies to that chat, and goes back to read-only after a restart", async () => {
     const s = await testServer();
-    const chat = await s.post<Thread>("/api/threads", { kind: "chat", agentId: "demo-planner" });
-    const other = await s.post<Thread>("/api/threads", { kind: "chat", agentId: "demo-coder" });
-    await s.post(`/api/threads/${chat.id}/write`, { allow: true });
-
-    let t = await say(s, chat.id, "写文件：notes/planner.md");
-    expect(fs.existsSync(path.join(s.root, "notes/planner.md"))).toBe(false);
-    t = await say(s, other.id, "写文件：notes/other.md");
+    const open = await s.chat("", { access: "allow" });
+    const other = await s.chat("写文件：notes/other.md");
+    await s.settled(other.id);
     expect(fs.existsSync(path.join(s.root, "notes/other.md"))).toBe(false);
-
-    await s.post(`/api/threads/${other.id}/write`, { allow: true });
-    const relay = await s.post<Thread>("/api/threads", { title: "接力", task: "x", acceptance: ["y"] });
-    expect((await s.request("POST", `/api/threads/${relay.id}/write`, { allow: true })).status).toBe(400);
-    expect((await s.request("POST", `/api/threads/${relay.id}/messages`, { text: "x", agentId: "demo-coder" })).status).toBe(400);
-    await s.settled(relay.id);
+    expect((await s.thread(open.id)).access).toBe("allow");
 
     const restarted = await testServer({ reuse: { home: s.home, root: s.root } });
-    t = await restarted.thread(other.id);
-    expect(t.approvedLevel).toBe(0);
-    expect(t.items.some((i) => i.kind === "notice" && i.text.includes("已收回这个对话的写权限"))).toBe(true);
+    const t = await restarted.thread(open.id);
+    expect(t.access).toBe("read");
+    expect(t.items.some((i) => i.kind === "notice" && i.text.includes("已恢复只读"))).toBe(true);
   });
 
-  it("keeps a Cursor agent read-only in chat: no edits, no commands", async () => {
+  it("keeps a Cursor model read-only by default: no edits, no commands", async () => {
     const s = await testServer({ autoApprove: false });
-    const created = await s.post<Thread>("/api/threads", { kind: "chat", task: "看看 notes 目录", agentId: "coder-cursor-composer" });
+    const created = await s.chat("看看 notes 目录", { model: CURSOR_COMPOSER });
     const t = await s.settled(created.id);
     expect(t.runs[0]).toMatchObject({ runtime: "cursor", status: "succeeded", changedFiles: [] });
     expect(fs.existsSync(path.join(s.root, "notes"))).toBe(false);
     expect(t.items.some((i) => i.kind === "approval")).toBe(false);
     expect(t.items.some((i) => i.kind === "tool" && i.tool.includes("find notes") && i.status !== "ok")).toBe(true);
   });
+
+  it("sends a Cursor model's file edits to an approval at「每次问我」", async () => {
+    const s = await testServer({ autoApprove: false });
+    const created = await s.chat("写一份说明", { model: CURSOR_COMPOSER, access: "ask" });
+    const blocked = await s.waitForThread(created.id, (t) => Boolean(pendingApproval(t)), "Cursor edit approval");
+    const approval = pendingApproval(blocked)!;
+    expect(approval).toMatchObject({ risk: "write", title: "Write notes/cursor-composer-2.5.md" });
+    await s.post(`/api/approvals/${approval.approvalId}`, { allow: false });
+    await s.waitForThread(created.id, (t) => t.items.some((i) => i.kind === "approval" && i.approvalId !== approval.approvalId), "the command request");
+    expect(fs.existsSync(path.join(s.root, "notes/cursor-composer-2.5.md"))).toBe(false);
+    await s.post(`/api/threads/${created.id}/cancel`);
+  });
 });
 
-describe("chat threads: shared context and memory (US-20)", () => {
-  it("reads the room context and writes memory another thread can find", async () => {
+describe("chats: shared context and memory (US-20)", () => {
+  it("reads the room context and writes memory another chat can find", async () => {
     const s = await testServer();
     await s.put("/api/context", { content: "# 房间上下文\n\n- 约定：周报用中文写，标记 CTX-42\n" });
-    const first = await s.post<Thread>("/api/threads", { kind: "chat", task: "记住：周报每周五下午五点前发出", agentId: "demo-planner" });
-    const t1 = await s.settled(first.id);
+    const t1 = await s.settled((await s.chat("记住：周报每周五下午五点前发出")).id);
     expect(briefing(s, t1.runs[0]!.id)).toContain("CTX-42");
     expect(tools(t1, "remember")[0]?.status).toBe("ok");
     const memory = await s.get<{ text: string; author: string; run?: string }[]>("/api/memory");
-    expect(memory.find((m) => m.text === "周报每周五下午五点前发出")).toMatchObject({ author: "demo-planner", run: t1.runs[0]!.id });
+    expect(memory.find((m) => m.text === "周报每周五下午五点前发出")).toMatchObject({ author: "demo:demo-chat", run: t1.runs[0]!.id });
 
-    const second = await s.post<Thread>("/api/threads", { kind: "chat", task: "查记忆：周报", agentId: "demo-reviewer" });
-    const t2 = await s.settled(second.id);
+    const t2 = await s.settled((await s.chat("查记忆：周报", { model: DEMO_REVIEW })).id);
     expect(tools(t2, "memory_search")[0]?.result).toContain("周报每周五下午五点前发出");
   });
 });
 
-describe("chat threads: live replies, tool calls and approvals (US-21)", () => {
+describe("chats: live replies, tool calls and approvals (US-21)", () => {
   it("streams the reply and broadcasts tool calls and approval requests as they happen", async () => {
     const s = await testServer({ autoApprove: false });
-    const created = await s.post<Thread>("/api/threads", { kind: "chat", agentId: "demo-coder" });
-    await s.post(`/api/threads/${created.id}/write`, { allow: true });
-    await s.post(`/api/threads/${created.id}/messages`, { text: "写文件：notes/live.md" });
+    const created = await s.chat("写文件：notes/live.md", { access: "ask" });
+    let blocked = await s.waitForThread(created.id, (t) => Boolean(pendingApproval(t)), "write approval");
+    await s.post(`/api/approvals/${pendingApproval(blocked)!.approvalId}`, { allow: true });
+    blocked = await s.waitForThread(created.id, (t) => pendingApproval(t)?.risk === "exec", "command approval");
 
-    const blocked = await s.waitForThread(created.id, (t) => t.items.some((i) => i.kind === "approval" && i.status === "pending"), "command approval");
     const updates = () => s.events.filter((e) => e.type === "thread" && (e.thread as Thread).id === created.id).map((e) => e.thread as Thread);
     expect(updates().some((t) => t.items.some((i) => i.kind === "approval" && i.status === "pending" && i.preview === "wc -l notes/live.md"))).toBe(true);
     expect(updates().some((t) => tools(t, "write_file").some((i) => i.status === "ok"))).toBe(true);
 
-    const approval = blocked.items.find((i) => i.kind === "approval" && i.status === "pending");
-    if (approval?.kind !== "approval") throw new Error("no approval");
-    await s.post(`/api/approvals/${approval.approvalId}`, { allow: false });
+    await s.post(`/api/approvals/${pendingApproval(blocked)!.approvalId}`, { allow: false });
     const t = await s.settled(created.id);
     expect(tools(t, "shell")[0]?.status).toBe("denied");
-    const deltas = s.events.filter((e) => e.type === "delta" && e.threadId === created.id);
-    expect(deltas.length).toBeGreaterThan(0);
+    expect(s.events.filter((e) => e.type === "delta" && e.threadId === created.id).length).toBeGreaterThan(0);
     expect(replies(t).join("")).toContain("写文件的结果见上面的工具调用");
-  });
-});
-
-describe("chat threads: chat with any model a route offers (US-89)", () => {
-  it("creates a chat-only card for a model on first pick, reuses it, and keeps it out of the relay", async () => {
-    const s = await testServer();
-    const card = await s.post<AgentCard>("/api/agents/chat", { source: "cursor", model: "gemini-4-argon-medium" });
-    expect(card).toMatchObject({ id: "chat-cursor-gemini-4-argon-medium", runtime: "cursor", provider: "cursor", roles: ["chat"], enabled: true });
-    expect(card.name).toContain("对话 ·");
-    expect(card.permissions.write).not.toBe("deny");
-    expect(fs.existsSync(path.join(s.root, ".baton/agents/chat-cursor-gemini-4-argon-medium.md"))).toBe(true);
-
-    await s.put(`/api/agents/${card.id}`, { ...card, enabled: false });
-    const again = await s.post<AgentCard>("/api/agents/chat", { source: "cursor", model: "gemini-4-argon-medium" });
-    expect(again).toMatchObject({ id: card.id, enabled: true });
-    expect((await s.get<AgentCard[]>("/api/agents")).filter((a) => a.model === "gemini-4-argon-medium")).toHaveLength(1);
-
-    const created = await s.post<Thread>("/api/threads", { kind: "chat", task: "看看 notes 目录", agentId: card.id });
-    const t = await s.settled(created.id);
-    expect(t.runs[0]).toMatchObject({ agentId: card.id, runtime: "cursor", model: "gemini-4-argon-medium", status: "succeeded", changedFiles: [] });
-
-    const input = { thread: t, agents: [again], settings: await s.get("/api/settings"), available: () => true };
-    for (const stage of ["plan", "implement", "review"] as const) expect(selectAgent(stage, input).chosen).toBeUndefined();
-  });
-
-  it("only offers models the route lists, and never GPT through Cursor", async () => {
-    const s = await testServer();
-    const wrong = await s.request("POST", "/api/agents/chat", { source: "cursor", model: "gpt-5.6-sol" });
-    expect(wrong.status).toBe(400);
-    expect(wrong.body.error).toContain("没有模型 gpt-5.6-sol");
-    expect((await s.request("POST", "/api/agents/chat", { source: "demo", model: "demo-plan" })).status).toBe(400);
-    expect((await s.request("POST", "/api/agents/chat", { source: "deepseek", model: "no-such-model" })).status).toBe(400);
+    const seen = new Set(updates().flatMap((x) => x.items.map((i) => i.kind)));
+    for (const kind of ["user", "run_start", "text", "tool", "approval", "run_end"]) expect(seen, kind).toContain(kind);
   });
 });

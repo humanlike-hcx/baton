@@ -8,6 +8,16 @@ import { AppState, MOCK_CURSOR, nodeScriptCommand } from "../src/state.ts";
 export const HOST = "127.0.0.1:47321";
 export const MOCK_CURSOR_COMMAND = nodeScriptCommand(MOCK_CURSOR);
 
+export interface ModelRef {
+  source: string;
+  model: string;
+}
+
+export const DEMO_CHAT: ModelRef = { source: "demo", model: "demo-chat" };
+export const DEMO_REVIEW: ModelRef = { source: "demo", model: "demo-review" };
+export const CURSOR_COMPOSER: ModelRef = { source: "cursor", model: "composer-2.5" };
+export const CURSOR_SONNET: ModelRef = { source: "cursor", model: "claude-sonnet-5-5-medium" };
+
 export function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
@@ -91,10 +101,27 @@ export async function testServer(
   const settled = (id: string, timeoutMs?: number) =>
     waitForThread(
       id,
-      (t) => !t.runs.some((r) => r.status === "running") && (t.status === "waiting" || t.status === "paused" || t.status === "done" || (t.status === "idle" && t.runs.length > 0)),
+      (t) => !t.runs.some((r) => r.status === "running") && (t.status === "waiting" || t.status === "paused" || (t.status === "idle" && t.runs.length > 0 && t.notes.length === 0)),
       "thread to settle",
       timeoutMs,
     );
+
+  /** Opens a chat on `model`, optionally sets its access, and sends `task` if given. */
+  async function chat(task: string, options: { model?: ModelRef; access?: "read" | "ask" | "allow" } = {}): Promise<Thread> {
+    const created = await ok<Thread>("POST", "/api/threads", { task: options.access ? "" : task, ...(options.model ?? DEMO_CHAT) });
+    if (options.access) {
+      await ok("POST", `/api/threads/${created.id}/access`, { access: options.access });
+      if (task) await ok("POST", `/api/threads/${created.id}/messages`, { text: task });
+    }
+    return created;
+  }
+
+  /** Sends a message and waits for the reply to it. */
+  async function say(threadId: string, text: string, model?: ModelRef): Promise<Thread> {
+    const before = (await thread(threadId)).runs.length;
+    await ok("POST", `/api/threads/${threadId}/messages`, { text, ...model });
+    return waitForThread(threadId, (t) => t.runs.length > before && !t.runs.some((r) => r.status === "running") && t.status !== "running", "chat reply");
+  }
 
   return {
     state,
@@ -110,5 +137,7 @@ export async function testServer(
     thread,
     waitForThread,
     settled,
+    chat,
+    say,
   };
 }

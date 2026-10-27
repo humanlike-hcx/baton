@@ -107,7 +107,7 @@ function ContextTab() {
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        房间上下文：项目是什么、当前目标、约定。每个 agent 开工时都会读到，agent 也可以用 <code className="rounded bg-muted px-1">update_context</code> 维护它。保持精简，细节放进记忆；超过预算时，整理员会合并重复内容、把细节移进记忆，改动可以撤销。
+        房间上下文：项目是什么、当前目标、约定。每个模型开始回复时都会读到，模型也可以用 <code className="rounded bg-muted px-1">update_context</code> 维护它。保持精简，细节放进记忆；超过预算时，整理员会合并重复内容、把细节移进记忆，改动可以撤销。
       </p>
       <Textarea value={content} onChange={(e) => setContent(e.target.value)} rows={18} className="font-mono text-xs leading-relaxed" />
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -281,7 +281,7 @@ function MemoryTab() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        长期记忆：值得以后复用的事实、决定、偏好。置顶的会注入每次启动上下文，其余由 agent 按需用 <code className="rounded bg-muted px-1">memory_search</code> 检索。重复或过长的条目会被拒绝。
+        长期记忆：值得以后复用的事实、决定、偏好。置顶的会注入每次启动上下文，其余由模型按需用 <code className="rounded bg-muted px-1">memory_search</code> 检索。重复或过长的条目会被拒绝。
       </p>
 
       <div className="rounded-lg border p-3">
@@ -319,7 +319,7 @@ function MemoryTab() {
       </div>
 
       <LoadState error={error} loading={!data} />
-      {data && visible.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">{data.length ? "没有匹配的记忆。" : "还没有记忆。agent 做出重要决定时会自己记下来，你也可以在上面添加。"}</p>}
+      {data && visible.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">{data.length ? "没有匹配的记忆。" : "还没有记忆。模型做出重要决定时会自己记下来，你也可以在上面添加。"}</p>}
       <div className="space-y-2">
         {visible.map((m) => (
           <div key={m.id} className={cn("rounded-lg border p-3", m.status === "superseded" && "opacity-55")}>
@@ -371,10 +371,10 @@ function LessonsTab() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        教训：反复出现的问题。agent 用 <code className="rounded bg-muted px-1">record_lesson</code> 记录，同一问题会累加次数。出现两次以上的，应该固化成规则、检查命令或测试，而不是继续靠提醒。
+        教训：反复出现的问题。模型用 <code className="rounded bg-muted px-1">record_lesson</code> 记录，同一问题会累加次数。出现两次以上的，应该固化成规则、检查命令或测试，而不是继续靠提醒。
       </p>
       <LoadState error={error} loading={!data} />
-      {data && data.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">还没有教训。检查阶段退回、或者同一个问题再次出现时会记在这里。</p>}
+      {data && data.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">还没有教训。检查不通过、或者同一个问题再次出现时会记在这里。</p>}
       <div className="space-y-2">
         {data?.map((l) => (
           <div key={l.id} className="rounded-lg border p-3">
@@ -439,7 +439,7 @@ function RulesTab() {
   if (!data) return <LoadState error={error} loading />;
   return (
     <div className="space-y-3">
-      <p className="text-sm text-muted-foreground">规则分层组装：通用规则 + 角色规则 + 运行时规则 + agent 自己的职责。改这里会影响之后所有运行的启动上下文。</p>
+      <p className="text-sm text-muted-foreground">规则分层组装：通用规则 + 角色规则（对话 / 检查）+ 运行时规则 + 模型家族规则。改这里会影响之后所有回复的启动上下文。</p>
       <div className="flex flex-col gap-3 md:flex-row">
         <div className="flex gap-1 overflow-x-auto md:w-48 md:shrink-0 md:flex-col">
           {data.map((r) => (
@@ -483,7 +483,7 @@ export function ContextPage({ tab }: { tab?: string }) {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
         <h1 className="text-xl font-semibold">上下文与记忆</h1>
-        <p className="mt-1 text-sm text-muted-foreground">所有 agent 共享的这一套：它们读同一份上下文、写同一份记忆，在同一个工作区里改同一批文件。</p>
+        <p className="mt-1 text-sm text-muted-foreground">所有模型共享的这一套：它们读同一份上下文、写同一份记忆，在同一个工作区里改同一批文件。</p>
         <Tabs value={active} onValueChange={(v) => navigate({ page: "context", tab: v })} className="mt-6">
           <TabsList>
             {TABS.map((t) => (

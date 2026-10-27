@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
   AlertTriangle,
-  ArrowRightLeft,
   Check,
   ChevronRight,
   CircleAlert,
@@ -9,13 +8,12 @@ import {
   CircleDashed,
   CircleSlash,
   CircleX,
+  ClipboardCheck,
   FileDiff,
   Info,
   Loader2,
-  Lightbulb,
   RotateCcw,
   ShieldQuestion,
-  Sparkles,
   Terminal,
   Wrench,
 } from "lucide-react";
@@ -23,10 +21,9 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { post } from "@/lib/api";
-import { STAGE_LABEL, STAGE_TONE, clockTime, kb, tokens } from "@/lib/format";
-import type { AgentView, CheckResult, Thread, TimelineItem } from "@/lib/types";
+import { clockTime, kb, tokens } from "@/lib/format";
+import type { CheckResult, Thread, TimelineItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { RichText } from "./rich-text";
 
@@ -61,12 +58,12 @@ function RunStart({ item }: { item: Item<"run_start"> }) {
     <div className="flex items-center gap-3 pt-3">
       <div className="h-px flex-1 bg-border" />
       <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span className={cn("font-semibold", STAGE_TONE[item.stage])}>{item.stage === "done" ? "完成" : STAGE_LABEL[item.stage]}</span>
+        {item.role === "review" && <span className="font-semibold text-amber-600 dark:text-amber-300">检查</span>}
         <span className="font-medium text-foreground">{item.agentName}</span>
         <span>
           {item.runtime === "cursor" ? "Cursor" : "Pi"} · {item.model}
         </span>
-        <span title="本次运行开场注入的上下文大小">开场 {kb(item.briefingBytes)}</span>
+        <span title="这次回复开场注入的上下文大小">开场 {kb(item.briefingBytes)}</span>
         <span>{clockTime(item.at)}</span>
       </div>
       <div className="h-px flex-1 bg-border" />
@@ -105,7 +102,7 @@ function ToolRow({ item }: { item: Item<"tool"> }) {
   let argsPreview = item.args;
   try {
     const parsed = JSON.parse(item.args) as Record<string, unknown>;
-    const main = parsed.path ?? parsed.command ?? parsed.query ?? parsed.pattern ?? parsed.text ?? parsed.done ?? parsed.stage;
+    const main = parsed.path ?? parsed.command ?? parsed.query ?? parsed.pattern ?? parsed.text ?? parsed.verdict;
     argsPreview = typeof main === "string" ? main : Object.keys(parsed).length ? JSON.stringify(parsed) : "";
   } catch {
     /* not JSON */
@@ -178,7 +175,7 @@ function ApprovalCard({ item }: { item: Item<"approval"> }) {
 
 function RunEnd({ item, actions, run }: { item: Item<"run_end">; actions: TimelineActions; run?: Thread["runs"][number] }) {
   const tone = item.status === "succeeded" ? "text-emerald-600" : item.status === "cancelled" ? "text-zinc-500" : "text-red-600";
-  const label = { succeeded: "运行结束", failed: "运行失败", cancelled: "已取消", running: "运行中" }[item.status];
+  const label = { succeeded: run?.role === "review" ? "检查结束" : "回复结束", failed: "运行失败", cancelled: "已取消", running: "运行中" }[item.status];
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-muted/30 px-3 py-2 text-xs">
       <span className={cn("font-medium", tone)}>{label}</span>
@@ -188,7 +185,7 @@ function RunEnd({ item, actions, run }: { item: Item<"run_end">; actions: Timeli
           {tokens(item.usage.totalTokens)} tokens{item.usage.costUsd > 0 ? ` · $${item.usage.costUsd.toFixed(4)}` : ""}
         </span>
       )}
-      {run?.role !== "advisor" && run?.snapshotBefore && (
+      {run?.role === "chat" && run.snapshotBefore && (
         <span className="ml-auto flex gap-1">
           {item.changedFiles.length > 0 && (
             <Button size="xs" variant="ghost" onClick={() => actions.showDiff(item.runId, item.changedFiles.join("、"))}>
@@ -204,66 +201,10 @@ function RunEnd({ item, actions, run }: { item: Item<"run_end">; actions: Timeli
   );
 }
 
-function HandoffCard({ item }: { item: Item<"handoff"> }) {
-  const h = item.handoff;
-  return (
-    <div className="rounded-xl border bg-card p-3 shadow-xs">
-      <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-        <ArrowRightLeft className="size-4 text-muted-foreground" />
-        交接 · {STAGE_LABEL[h.stage]}
-        {h.auto && <Badge variant="secondary">自动生成</Badge>}
-        {h.verdict && (
-          <Badge className={h.verdict === "pass" ? "bg-emerald-600 text-white" : "bg-red-600 text-white"}>{h.verdict === "pass" ? "结论：通过" : "结论：不通过"}</Badge>
-        )}
-      </div>
-      <div className="mt-2 grid gap-3 text-sm sm:grid-cols-2">
-        <div className="sm:col-span-2">
-          <div className="text-xs text-muted-foreground">做了什么</div>
-          <RichText text={h.done} />
-        </div>
-        {h.issues && h.issues.length > 0 && (
-          <div className="sm:col-span-2">
-            <div className="text-xs text-red-600">问题</div>
-            <ul className="mt-0.5 list-disc space-y-0.5 pl-5">
-              {h.issues.map((i, idx) => (
-                <li key={idx}>{i}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {h.files.length > 0 && (
-          <div>
-            <div className="text-xs text-muted-foreground">改动的文件</div>
-            <div className="mt-0.5 flex flex-wrap gap-1">
-              {h.files.map((f) => (
-                <code key={f} className="rounded bg-muted px-1.5 py-0.5 text-xs">
-                  {f}
-                </code>
-              ))}
-            </div>
-          </div>
-        )}
-        {h.remaining && (
-          <div>
-            <div className="text-xs text-muted-foreground">还剩什么</div>
-            <RichText text={h.remaining} />
-          </div>
-        )}
-        {h.next && (
-          <div>
-            <div className="text-xs text-muted-foreground">建议下一步</div>
-            <RichText text={h.next} />
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function ChecksCard({ item }: { item: Item<"checks"> }) {
   return (
     <div className="rounded-xl border p-3">
-      <div className="text-sm font-medium">检查命令（先于模型审查运行）</div>
+      <div className="text-sm font-medium">检查命令（先于模型审查运行，失败时结论不能是通过）</div>
       <div className="mt-2 space-y-1.5">
         {item.results.map((r) => {
           const Icon = CHECK_ICON[r.status];
@@ -292,105 +233,31 @@ function ChecksCard({ item }: { item: Item<"checks"> }) {
   );
 }
 
-function DecisionCard({ item, thread, agents }: { item: Item<"decision">; thread: Thread; agents: AgentView[] }) {
-  const d = item.decision;
-  const pending = thread.pending?.id === d.id;
-  const [agentId, setAgentId] = useState(d.agentId);
-  const [busy, setBusy] = useState(false);
-  const candidates = (d.candidates ?? []).map((id) => agents.find((a) => a.id === id)).filter((a): a is AgentView => Boolean(a));
-  const respond = async (approve: boolean) => {
-    setBusy(true);
-    try {
-      await post(`/api/threads/${thread.id}/decisions/${d.id}`, { approve, agentId });
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const isViolation = d.kind === "violation";
-  const detail = d.detail.replace(/^\[退回\]\s*/, "");
+function ReviewCard({ item }: { item: Item<"review"> }) {
+  const pass = item.verdict.verdict === "pass";
   return (
-    <div
-      className={cn(
-        "rounded-xl border p-4",
-        pending ? (isViolation ? "border-red-500/40 bg-red-500/5 shadow-sm" : "border-primary/30 bg-primary/[0.03] shadow-sm") : "bg-muted/20",
-      )}
-    >
-      <div className="flex items-start gap-2">
-        {isViolation ? <AlertTriangle className="mt-0.5 size-4 text-red-600" /> : <Sparkles className="mt-0.5 size-4 text-primary" />}
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">
-            {isViolation ? `触发规则：${d.title}` : d.title}
-            {item.resolution && (
-              <Badge variant="outline" className="ml-2 align-middle">
-                {item.resolution === "approved" ? "已批准" : "已暂停"}
-              </Badge>
-            )}
-          </div>
-          <RichText text={detail} className="mt-1 text-muted-foreground" />
-        </div>
+    <div className={cn("rounded-xl border p-3", pass ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5")}>
+      <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+        <ClipboardCheck className={cn("size-4", pass ? "text-emerald-600" : "text-red-600")} />
+        {item.agentName} 的检查结论
+        <Badge className={pass ? "bg-emerald-600 text-white" : "bg-red-600 text-white"}>{pass ? "通过" : "不通过"}</Badge>
       </div>
-      {d.advice && (
-        <div className="mt-3 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
-          <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-violet-700 dark:text-violet-300">
-            <Lightbulb className="size-3.5" /> 顾问意见（只读、干净上下文）
-          </div>
-          <RichText text={d.advice} />
-        </div>
+      {item.overruled && (
+        <p className="mt-2 flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          {item.overruled}
+        </p>
       )}
-      {pending && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {candidates.length > 1 && (
-            <Select value={agentId} onValueChange={setAgentId}>
-              <SelectTrigger size="sm" className="min-w-48">
-                <SelectValue placeholder="选择 agent" />
-              </SelectTrigger>
-              <SelectContent>
-                {candidates.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <Button size="sm" disabled={busy} onClick={() => respond(true)}>
-            {d.kind === "complete" ? "标记完成" : isViolation ? "我知道风险，继续" : "批准，开始"}
-          </Button>
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => respond(false)}>
-            {d.kind === "complete" ? "还没完" : "暂停"}
-          </Button>
-        </div>
+      {item.verdict.issues.length > 0 && (
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm">
+          {item.verdict.issues.map((issue, i) => (
+            <li key={i}>
+              <RichText text={issue} />
+            </li>
+          ))}
+        </ul>
       )}
     </div>
-  );
-}
-
-function AdvisorCardView({ item }: { item: Item<"advisor"> }) {
-  return (
-    <Collapsible className="rounded-xl border border-violet-500/30 p-3">
-      <CollapsibleTrigger className="group flex w-full items-center gap-2 text-left text-sm font-medium">
-        <Lightbulb className="size-4 text-violet-600" /> 顾问 · {item.agentName}
-        <span className="text-xs font-normal text-muted-foreground">请教卡与完整意见</span>
-        <ChevronRight className="ml-auto size-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="mt-3 grid gap-2 md:grid-cols-3">
-          {[
-            ["机械事实", item.card.facts],
-            ["我的判断", item.card.judgement],
-            ["我希望听到的答案", item.card.hoping],
-          ].map(([title, text]) => (
-            <div key={title} className="rounded-lg bg-muted/40 p-2">
-              <div className="mb-1 text-xs font-medium text-muted-foreground">{title}</div>
-              <RichText text={text!} className="text-xs" />
-            </div>
-          ))}
-        </div>
-        <RichText text={item.advice} className="mt-3" />
-      </CollapsibleContent>
-    </Collapsible>
   );
 }
 
@@ -409,7 +276,7 @@ function Notice({ item }: { item: Item<"notice"> }) {
   );
 }
 
-export function TimelineView({ thread, agents, actions }: { thread: Thread; agents: AgentView[]; actions: TimelineActions }) {
+export function TimelineView({ thread, actions }: { thread: Thread; actions: TimelineActions }) {
   return (
     <div className="space-y-3">
       {thread.items.map((item) => {
@@ -426,14 +293,10 @@ export function TimelineView({ thread, agents, actions }: { thread: Thread; agen
             return <ApprovalCard key={item.id} item={item} />;
           case "run_end":
             return <RunEnd key={item.id} item={item} actions={actions} run={thread.runs.find((r) => r.id === item.runId)} />;
-          case "handoff":
-            return <HandoffCard key={item.id} item={item} />;
           case "checks":
             return <ChecksCard key={item.id} item={item} />;
-          case "decision":
-            return <DecisionCard key={item.id} item={item} thread={thread} agents={agents} />;
-          case "advisor":
-            return <AdvisorCardView key={item.id} item={item} />;
+          case "review":
+            return <ReviewCard key={item.id} item={item} />;
           case "notice":
             return <Notice key={item.id} item={item} />;
           default:

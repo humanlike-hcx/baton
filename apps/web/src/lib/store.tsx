@@ -70,13 +70,11 @@ export function BatonProvider({ children }: { children: ReactNode }) {
                   threads: [
                     {
                       id: msg.thread.id,
-                      kind: msg.thread.kind,
                       title: msg.thread.title,
-                      stage: msg.thread.stage,
                       status: msg.thread.status,
                       updatedAt: msg.thread.updatedAt,
-                      pending: msg.thread.pending?.title,
                       runs: msg.thread.runs.length,
+                      model: msg.thread.model,
                     },
                     ...s.threads.filter((t) => t.id !== msg.thread.id),
                   ],

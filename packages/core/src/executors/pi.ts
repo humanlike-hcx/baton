@@ -13,8 +13,8 @@ import {
 import { CHATGPT_PROVIDERS, chatgptMethod } from "../credentials.ts";
 import { runTool, type ToolSpec } from "../tools.ts";
 import { newId } from "../util.ts";
-import { DEMO_CONTEXT_WINDOW, demoComplete, demoScript, demoSettings } from "./demo.ts";
-import { HANDOFF_REMINDER, expectsHandoff, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
+import { DEMO_CONTEXT_WINDOW, demoComplete, demoScript } from "./demo.ts";
+import { VERDICT_REMINDER, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
 
 function resultText(result: unknown): string {
   const content = (result as { content?: { type: string; text?: string }[] } | undefined)?.content;
@@ -81,7 +81,7 @@ export class PiExecutor implements Executor {
         models: [{ id: agent.model, name: agent.name, contextWindow: DEMO_CONTEXT_WINDOW, maxTokens: 8_000 }],
         tokensPerSecond: this.options.demoTokensPerSecond ?? 200,
       });
-      faux.setResponses(demoScript(req.role, req.thread, req.prompt, req.briefing.text));
+      faux.setResponses(demoScript(req.role, req.prompt, req.briefing.text));
       runtime.registerNativeProvider(faux.provider);
       cleanup = () => runtime.unregisterProvider(providerId);
       model = runtime.getModel(providerId, agent.model);
@@ -90,7 +90,7 @@ export class PiExecutor implements Executor {
       if (!method) return { status: "failed", finalText: "", error: "还没有用 ChatGPT 登录。请到「设置 → 账号」里登录。" };
       model = runtime.getModel(CHATGPT_PROVIDERS[method], agent.model);
       if (!model && method === "codex") {
-        return { status: "failed", finalText: "", error: `用 Codex 账号登录时没有 ${agent.model}。请到 Agents 页给这个 agent 换一个列表里的 GPT 模型。` };
+        return { status: "failed", finalText: "", error: `用 Codex 账号登录时没有 ${agent.model}。请在对话里换一个列表里的 GPT 模型。` };
       }
     } else {
       const credential = await this.options.credentials.read(agent.provider);
@@ -104,7 +104,7 @@ export class PiExecutor implements Executor {
       return { status: "failed", finalText: "", error: `找不到模型 ${agent.provider}/${agent.model}` };
     }
 
-    const settingsManager = SettingsManager.inMemory(agent.source === "demo" ? demoSettings(req.thread) : {});
+    const settingsManager = SettingsManager.inMemory({});
     const resourceLoader = new DefaultResourceLoader({
       cwd: req.workspaceRoot,
       agentDir: this.options.agentDir,
@@ -174,7 +174,7 @@ export class PiExecutor implements Executor {
           req.emit({ type: "tool_end", id: event.toolCallId, tool: event.toolName, ok: !event.isError, result: resultText(event.result) });
           break;
         case "compaction_end":
-          if (event.result) req.emit({ type: "compaction", summary: event.result.summary });
+          if (event.result) req.emit({ type: "notice", level: "info", text: "Pi 压缩了这次运行的上下文，较早的工具输出已折叠成摘要。" });
           else if (event.errorMessage) req.emit({ type: "notice", level: "warn", text: `Pi 压缩上下文失败：${event.errorMessage}` });
           break;
         case "auto_retry_start":
@@ -187,9 +187,9 @@ export class PiExecutor implements Executor {
     req.signal.addEventListener("abort", onAbort, { once: true });
     try {
       await session.prompt(req.prompt);
-      if (!req.signal.aborted && !lastError && !req.hasHandoff() && expectsHandoff(req.role)) {
-        req.emit({ type: "notice", level: "warn", text: "运行没有写交接，追加一次提醒。" });
-        await session.prompt(HANDOFF_REMINDER);
+      if (!req.signal.aborted && !lastError && req.role === "review" && !req.hasVerdict()) {
+        req.emit({ type: "notice", level: "warn", text: "检查没有给出结论，追加一次提醒。" });
+        await session.prompt(VERDICT_REMINDER);
       }
       const stats = session.getSessionStats();
       const usage = {

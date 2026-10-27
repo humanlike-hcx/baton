@@ -4,11 +4,10 @@ import { familyLabel } from "@baton/core/families";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import { RUNTIME_LABEL, STAGE_LABEL, tokens } from "@/lib/format";
-import type { Stage, StatRow } from "@/lib/types";
+import { RUNTIME_LABEL, SOURCE_LABEL, tokens } from "@/lib/format";
+import type { StatRow } from "@/lib/types";
 
 const USD_TO_CNY = 7.2;
-const STAGES: Stage[] = ["plan", "implement", "review"];
 
 function pct(n: number, d: number): string {
   return d ? `${Math.round((n / d) * 100)}%` : "—";
@@ -40,7 +39,7 @@ export function StatsPage() {
           <div>
             <h1 className="text-xl font-semibold">统计</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              按「运行时 + 模型」统计，而不是笼统按厂商。用这些数字调整路由：谁实现一次过的多、谁总被退回、谁花钱最多。
+              按「运行时 + 模型」统计：回复成功了多少、改过多少次文件、它的改动被别的模型检查时通过了多少，以及它替别人做了多少次检查。用这些数字决定平时用谁。
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={() => void load()}>
@@ -50,62 +49,50 @@ export function StatsPage() {
 
         {error && <p className="mt-6 text-sm text-destructive">{error}</p>}
         {!rows && !error && <Skeleton className="mt-6 h-40 w-full rounded-xl" />}
-        {rows && rows.length === 0 && <div className="mt-6 rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">还没有运行记录。跑完一个线程后这里会出现每个模型的表现。</div>}
+        {rows && rows.length === 0 && <div className="mt-6 rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">还没有运行记录。聊过几轮之后这里会出现每个模型的表现。</div>}
 
         {sorted.length > 0 && (
           <div className="mt-6 overflow-x-auto rounded-xl border">
             <table className="w-full min-w-[720px] text-sm">
               <thead className="bg-muted/50 text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium">运行时 · 模型</th>
+                  <th className="px-3 py-2 text-left font-medium">模型</th>
                   <th className="px-3 py-2 text-right font-medium">运行</th>
-                  {STAGES.map((s) => (
-                    <th key={s} className="px-3 py-2 text-right font-medium">
-                      {STAGE_LABEL[s]}成功
-                    </th>
-                  ))}
-                  <th className="px-3 py-2 text-right font-medium">实现一次过</th>
-                  <th className="px-3 py-2 text-right font-medium">被退回</th>
-                  <th className="px-3 py-2 text-right font-medium">你采纳/拒绝</th>
+                  <th className="px-3 py-2 text-right font-medium">成功 / 失败</th>
+                  <th className="px-3 py-2 text-right font-medium">改了文件</th>
+                  <th className="px-3 py-2 text-right font-medium" title="它的改动被别的模型检查的结果">被检查：通过 / 不通过</th>
+                  <th className="px-3 py-2 text-right font-medium">替别人检查</th>
                   <th className="px-3 py-2 text-right font-medium">tokens</th>
                   <th className="px-3 py-2 text-right font-medium">花费</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {sorted.map((r) => {
-                  const impl = r.stages.implement;
-                  return (
-                    <tr key={r.key}>
-                      <td className="px-3 py-2">
-                        <div className="font-mono text-xs">{r.model}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {RUNTIME_LABEL[r.runtime as "pi" | "cursor"] ?? r.runtime} · {familyLabel(r.family)} · {r.agentIds.join(", ")}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{r.runs}</td>
-                      {STAGES.map((s) => {
-                        const st = r.stages[s];
-                        return (
-                          <td key={s} className="px-3 py-2 text-right tabular-nums">
-                            {st ? `${st.succeeded}/${st.runs}` : "—"}
-                          </td>
-                        );
-                      })}
-                      <td className="px-3 py-2 text-right tabular-nums">{impl ? pct(impl.firstPass, impl.runs) : "—"}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{impl ? impl.sentBack : "—"}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {r.accepted}/{r.declined}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{tokens(r.tokens)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{r.costUsd > 0 ? `¥${(r.costUsd * USD_TO_CNY).toFixed(2)}` : "订阅内"}</td>
-                    </tr>
-                  );
-                })}
+                {sorted.map((r) => (
+                  <tr key={r.key}>
+                    <td className="px-3 py-2">
+                      <div className="font-mono text-xs">{r.model}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {SOURCE_LABEL[r.source]} · {RUNTIME_LABEL[r.runtime] ?? r.runtime} · {familyLabel(r.family)}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{r.runs}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {r.succeeded} / {r.failed}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{r.changes}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {r.reviewedPass + r.reviewedFail ? `${r.reviewedPass} / ${r.reviewedFail}（${pct(r.reviewedPass, r.reviewedPass + r.reviewedFail)}）` : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{r.reviewsGiven || "—"}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{tokens(r.tokens)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{r.source === "deepseek" ? `¥${(r.costUsd * USD_TO_CNY).toFixed(2)}` : r.source === "demo" ? "免费" : "订阅内"}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         )}
-        <p className="mt-3 text-xs text-muted-foreground">ChatGPT 和 Cursor 走订阅，按次数计入额度；DeepSeek 按 API 实际花费换算成人民币。</p>
+        <p className="mt-3 text-xs text-muted-foreground">ChatGPT 和 Cursor 走订阅，不按 token 计费；DeepSeek 按 API 实际花费换算成人民币。</p>
       </div>
     </div>
   );

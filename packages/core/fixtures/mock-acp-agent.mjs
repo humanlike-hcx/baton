@@ -92,8 +92,8 @@ async function prompt(params) {
   const session = sessions.get(params.sessionId);
   const text = params.prompt.map((p) => p.text ?? "").join("\n");
   session.cancelled = false;
-  if (text.startsWith("你还没有调用 write_handoff")) {
-    await stream(params.sessionId, "（模拟）没有可用的 MCP 工具，交接请工作台代写。");
+  if (text.startsWith("你还没有调用 submit_review")) {
+    await stream(params.sessionId, "（模拟）没有可用的 MCP 工具，给不出结论。");
     return { stopReason: "end_turn" };
   }
   const isReview = text.includes("角色：检查");
@@ -134,11 +134,12 @@ async function prompt(params) {
     content: [{ type: "content", content: { type: "text", text: allowed ? listNotes(session.cwd) : "rejected" } }],
   });
   if (session.cancelled) return { stopReason: "cancelled" };
-  const handoff = isReview
-    ? { done: "（模拟）核对了改动。", verdict: "pass", next: "可以标记完成。" }
-    : { done: `（模拟）写入了 ${files.join("、") || "无"}。`, files, next: "交给检查阶段。" };
-  const viaBridge = await callBridge(session, "write_handoff", handoff);
-  await stream(params.sessionId, viaBridge ? "已通过 baton MCP 写好交接。" : "完成。");
+  if (isReview) {
+    const viaBridge = await callBridge(session, "submit_review", { verdict: "pass", issues: [] });
+    await stream(params.sessionId, viaBridge ? "已通过 baton MCP 给出结论：通过。" : "完成。");
+  } else {
+    await stream(params.sessionId, `完成，写入了 ${files.join("、") || "无"}。`);
+  }
   return { stopReason: "end_turn" };
 }
 

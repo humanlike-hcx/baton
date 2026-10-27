@@ -3,82 +3,32 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runChecks } from "../src/checks.ts";
 import { compileBriefing } from "../src/context.ts";
-import { defaultSettings } from "../src/defaults.ts";
-import { modelFamily } from "../src/families.ts";
-import { compactionProgress, listLessons, listMemory, mergeProgress, recordLesson, remember } from "../src/memory.ts";
+import { RULE_FILES, defaultSettings } from "../src/defaults.ts";
+import { modelFamily, validateModelRoute } from "../src/families.ts";
+import { listLessons, listMemory, recordLesson, remember } from "../src/memory.ts";
 import { applyChunks, parsePatch } from "../src/patch.ts";
-import { parseRelayDraft } from "../src/promote.ts";
-import { PermissionError, resolveWorkspacePath, shellPolicy } from "../src/permissions.ts";
-import { isStall, nextTransition, selectAgent } from "../src/router.ts";
+import { REVIEW_PERMISSIONS, PermissionError, accessPermissions, resolveWorkspacePath, shellPolicy } from "../src/permissions.ts";
 import { runShell } from "../src/shell.ts";
 import { ALL_TOOLS, toolsFor } from "../src/tools.ts";
-import type { AgentCard, RunRecord, Thread } from "../src/types.ts";
+import { runAgent } from "../src/orchestrator.ts";
+import type { RunAgent, Thread } from "../src/types.ts";
 import { truncateMiddle } from "../src/util.ts";
 import { Workspace } from "../src/workspace.ts";
 import { tempDir } from "./helpers.ts";
 
-function agent(partial: Partial<AgentCard> & Pick<AgentCard, "id" | "model">): AgentCard {
+function agent(partial: Partial<RunAgent> & Pick<RunAgent, "id" | "model">): RunAgent {
   return {
     name: partial.id,
     runtime: "pi",
     source: "demo",
     provider: "x",
-    roles: ["implement"],
     permissions: { write: "allow", exec: "ask", network: "deny" },
-    costTier: 1,
-    enabled: true,
-    body: "",
     ...partial,
   };
 }
 
 function thread(partial: Partial<Thread> = {}): Thread {
-  return {
-    id: "th_test",
-    kind: "relay",
-    title: "t",
-    task: "t",
-    acceptance: ["a"],
-    stage: "plan",
-    status: "idle",
-    createdAt: "",
-    updatedAt: "",
-    hops: 0,
-    sendBacks: 0,
-    stalls: 0,
-    summary: "",
-    runs: [],
-    items: [],
-    pinnedAgents: {},
-    spend: { deepseekCny: 0, chatgptRuns: 0, cursorRuns: 0 },
-    reviewIssueRounds: 0,
-    approvedLevel: 0,
-    extraHops: 0,
-    notes: [],
-    ...partial,
-  };
-}
-
-function run(partial: Partial<RunRecord>): RunRecord {
-  return {
-    id: "run_x",
-    threadId: "th_test",
-    agentId: "a",
-    agentName: "a",
-    runtime: "pi",
-    model: "m",
-    family: "m",
-    stage: "implement",
-    role: "implement",
-    status: "succeeded",
-    startedAt: "",
-    briefingHash: "",
-    briefingBytes: 0,
-    changedFiles: [],
-    decisions: 0,
-    finalText: "",
-    ...partial,
-  };
+  return { id: "th_test", title: "t", status: "idle", createdAt: "", updatedAt: "", summary: "", runs: [], items: [], access: "read", notes: [], ...partial };
 }
 
 describe("model families", () => {
@@ -90,7 +40,18 @@ describe("model families", () => {
     expect(modelFamily("sonnet-4.5")).toBe("claude");
     expect(modelFamily("claude-opus-4.1")).toBe("claude");
     expect(modelFamily("composer-1")).toBe("composer");
-    expect(modelFamily("demo-code", "demo")).toBe("demo-code");
+    expect(modelFamily("demo-chat", "demo")).toBe("demo-chat");
+  });
+
+  it("keeps each family on its one route", () => {
+    expect(validateModelRoute("chatgpt", "gpt-5.5")).toBeUndefined();
+    expect(validateModelRoute("chatgpt", "deepseek-v4-pro")).toMatch(/ChatGPT/);
+    expect(validateModelRoute("deepseek", "deepseek-v4-pro")).toBeUndefined();
+    expect(validateModelRoute("deepseek", "gpt-5.5")).toBeDefined();
+    expect(validateModelRoute("cursor", "claude-sonnet-5-5-medium")).toBeUndefined();
+    expect(validateModelRoute("cursor", "gpt-5.6-sol")).toBeDefined();
+    expect(validateModelRoute("cursor", "auto")).toBeDefined();
+    expect(validateModelRoute("openrouter", "x")).toMatch(/不支持/);
   });
 });
 
@@ -126,41 +87,37 @@ describe("permissions", () => {
   });
 });
 
-describe("tools per role", () => {
-  it("gives GPT the patch format, others text replacement, and hides routing from executors", () => {
-    const gpt = agent({ id: "g", model: "gpt-5.5", roles: ["implement", "plan"] });
-    const ds = agent({ id: "d", model: "deepseek-v4-pro" });
-    expect(toolsFor(gpt, "implement").map((t) => t.name)).toContain("apply_patch");
-    expect(toolsFor(ds, "implement").map((t) => t.name)).toContain("edit_file");
-    expect(toolsFor(ds, "implement").map((t) => t.name)).not.toContain("handoff_to");
-    expect(toolsFor(gpt, "plan").map((t) => t.name)).toContain("handoff_to");
-    expect(toolsFor(gpt, "plan").map((t) => t.name)).not.toContain("write_file");
-    expect(toolsFor(gpt, "advisor").map((t) => t.name)).toEqual(["read_file", "list_files", "search", "read_context", "memory_search"]);
-    const readOnly = agent({ id: "r", model: "x", permissions: { write: "deny", exec: "deny", network: "deny" } });
-    expect(toolsFor(readOnly, "implement").map((t) => t.name)).not.toContain("shell");
+describe("access levels and tools per role", () => {
+  it("maps a chat's access level to permissions, and a review to read-only", () => {
+    expect(accessPermissions("read")).toEqual({ write: "deny", exec: "deny", network: "ask" });
+    expect(accessPermissions("ask")).toEqual({ write: "ask", exec: "ask", network: "ask" });
+    expect(accessPermissions("allow")).toEqual({ write: "allow", exec: "allow", network: "allow" });
+    const allow = runAgent({ source: "deepseek", model: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }, accessPermissions("allow"));
+    expect(allow).toMatchObject({ id: "deepseek:deepseek-v4-pro", name: "DeepSeek V4 Pro · DeepSeek", runtime: "pi", provider: "deepseek" });
+    const settings = defaultSettings("t");
+    expect(shellPolicy("npm test", settings, allow).policy).toBe("allow");
+    expect(shellPolicy("sudo npm test", settings, allow).policy).toBe("deny");
+    expect(shellPolicy("git push", settings, allow).policy).toBe("deny");
   });
 
-  it("gives Pi agents no network tool, even with network allowed", () => {
+  it("gives GPT the patch format, others text replacement, and drops write tools when read-only", () => {
+    const gpt = agent({ id: "g", model: "gpt-5.5" });
+    const ds = agent({ id: "d", model: "deepseek-v4-pro" });
+    expect(toolsFor(gpt, "chat").map((t) => t.name)).toContain("apply_patch");
+    expect(toolsFor(ds, "chat").map((t) => t.name)).toContain("edit_file");
+    expect(toolsFor(ds, "chat").map((t) => t.name)).not.toContain("submit_review");
+    const readOnly = agent({ id: "r", model: "x", permissions: accessPermissions("read") });
+    expect(toolsFor(readOnly, "chat").map((t) => t.name)).toEqual(["read_file", "list_files", "search", "read_context", "update_context", "memory_search", "remember", "record_lesson"]);
+    const reviewer = agent({ id: "v", model: "x", permissions: REVIEW_PERMISSIONS });
+    expect(toolsFor(reviewer, "review").map((t) => t.name)).toEqual(["read_file", "list_files", "search", "read_context", "memory_search", "record_lesson", "submit_review"]);
+  });
+
+  it("gives Pi models no network tool, even with network allowed", () => {
     expect(ALL_TOOLS.filter((t) => t.risk === "network")).toEqual([]);
-    const online = agent({ id: "n", model: "deepseek-v4-pro", permissions: { write: "allow", exec: "allow", network: "allow" } });
-    for (const role of ["plan", "implement", "review", "advisor", "chat"] as const) {
+    const online = agent({ id: "n", model: "deepseek-v4-pro", permissions: accessPermissions("allow") });
+    for (const role of ["chat", "review"] as const) {
       expect(toolsFor(online, role).every((t) => t.risk !== "network"), role).toBe(true);
     }
-  });
-});
-
-describe("relay drafts from a chat", () => {
-  it("reads a fenced or bare JSON draft and rejects drafts without acceptance criteria", () => {
-    const fenced = '好的：\n```json\n{"title": "写说明", "task": "写一份说明", "acceptance": ["有说明", " ", 3]}\n```';
-    expect(parseRelayDraft(fenced)).toEqual({ title: "写说明", task: "写一份说明", acceptance: ["有说明"] });
-    expect(parseRelayDraft('整理如下 {"task": "把 README 翻成英文", "acceptance": ["README.en.md 存在"]} 就这样')).toEqual({
-      title: "把 README 翻成英文",
-      task: "把 README 翻成英文",
-      acceptance: ["README.en.md 存在"],
-    });
-    expect(parseRelayDraft('{"title": "x", "task": "y", "acceptance": []}')).toBeUndefined();
-    expect(parseRelayDraft("{not json}")).toBeUndefined();
-    expect(parseRelayDraft("我觉得可以先写一份说明。")).toBeUndefined();
   });
 });
 
@@ -174,53 +131,6 @@ describe("apply_patch", () => {
     if (update.type !== "update") throw new Error();
     expect(applyChunks("one\ntwo\nthree\n", update.chunks, "b.txt")).toBe("one\nTWO\nthree\n");
     expect(() => applyChunks("x\n", update.chunks, "b.txt")).toThrow(/找不到/);
-  });
-});
-
-describe("compaction progress", () => {
-  const full = [
-    "## Goal",
-    "导出配置",
-    "## Progress",
-    "### Done",
-    "- [x] 加了 `exportConfig()`",
-    "- [x] 写了 src/export.test.ts",
-    "### In Progress",
-    "- [ ] 设置页按钮",
-    "### Blocked",
-    "- (none)",
-    "## Key Decisions",
-    "- **格式**：JSON",
-    "## Next Steps",
-    "1. 接上按钮",
-    "",
-    "---",
-    "",
-    "**Turn Context (split turn):**",
-    "",
-    "## Progress So Far",
-    "- 跑过一次 pnpm test",
-    "",
-    "<modified-files>",
-    "src/export.ts",
-    "</modified-files>",
-  ].join("\n");
-
-  it("reads done, remaining and next from both summary formats", () => {
-    const p = compactionProgress(full);
-    expect(p).toEqual({ compactions: 1, done: ["加了 `exportConfig()`", "写了 src/export.test.ts", "跑过一次 pnpm test"], remaining: ["设置页按钮"], next: ["接上按钮"] });
-    expect(compactionProgress("## Progress\n### Done\n- [x] a", p).compactions).toBe(2);
-  });
-
-  it("adds only what the handoff left out and keeps what the agent wrote", () => {
-    const p = compactionProgress(full);
-    const merged = mergeProgress({ done: "加了 exportConfig()。", remaining: "", next: "交给检查" }, p);
-    expect(merged.done).toContain("压缩前的进展");
-    expect(merged.done).toContain("写了 src/export.test.ts");
-    expect(merged.done.match(/exportConfig/g)).toHaveLength(1);
-    expect(merged.remaining).toBe("- 设置页按钮");
-    expect(merged.next).toBe("交给检查");
-    expect(mergeProgress({ done: "x", remaining: "", next: "" }, undefined)).toEqual({ done: "x", remaining: "", next: "" });
   });
 });
 
@@ -264,56 +174,6 @@ describe("checks", () => {
   });
 });
 
-describe("router", () => {
-  const settings = defaultSettings("t");
-  const coderGpt = agent({ id: "coder-gpt", model: "gpt-5.5", costTier: 3 });
-  const coderDs = agent({ id: "coder-ds", model: "deepseek-v4-pro", costTier: 1 });
-  const reviewerGpt = agent({ id: "rev-gpt", model: "gpt-5.5", roles: ["review"], permissions: { write: "deny", exec: "ask", network: "deny" } });
-  const reviewerClaude = agent({ id: "rev-claude", model: "sonnet-4.5", roles: ["review"], costTier: 2, permissions: { write: "deny", exec: "ask", network: "deny" } });
-  const all = [coderGpt, coderDs, reviewerGpt, reviewerClaude];
-
-  it("picks the cheapest available agent that owns the role", () => {
-    const s = selectAgent("implement", { thread: thread(), agents: all, settings, available: () => true });
-    expect(s.chosen?.id).toBe("coder-ds");
-    const s2 = selectAgent("implement", { thread: thread(), agents: all, settings, available: (a) => a.id !== "coder-ds" });
-    expect(s2.chosen?.id).toBe("coder-gpt");
-    expect(s2.rejected.find((r) => r.id === "coder-ds")?.reason).toMatch(/登录/);
-  });
-
-  it("never lets a model family review its own implementation", () => {
-    const t = thread({ runs: [run({ stage: "implement", family: "gpt" })] });
-    const s = selectAgent("review", { thread: t, agents: all, settings, available: () => true });
-    expect(s.chosen?.id).toBe("rev-claude");
-    expect(s.rejected.find((r) => r.id === "rev-gpt")?.reason).toMatch(/gpt/);
-  });
-
-  it("respects spending caps", () => {
-    const t = thread({ spend: { deepseekCny: 99, chatgptRuns: 0, cursorRuns: 0 } });
-    const s = selectAgent("implement", { thread: t, agents: [{ ...coderDs, source: "deepseek" }], settings, available: () => true });
-    expect(s.chosen).toBeUndefined();
-    expect(s.rejected[0]?.reason).toMatch(/上限/);
-  });
-
-  it("enforces stage transitions and limits", () => {
-    expect(nextTransition(thread(), run({ stage: "implement" }), settings)).toMatchObject({ kind: "advance", to: "review" });
-    expect(nextTransition(thread(), run({ stage: "review", handoff: { verdict: "pass" } as never }), settings)).toMatchObject({ kind: "complete" });
-    expect(nextTransition(thread(), run({ stage: "review", handoff: { verdict: "fail", issues: ["x"] } as never }), settings)).toMatchObject({ kind: "advance", to: "implement", sendBack: true });
-    expect(nextTransition(thread({ sendBacks: 2 }), run({ stage: "review", handoff: { verdict: "fail", issues: ["x"] } as never }), settings)).toMatchObject({ kind: "violation" });
-    expect(nextTransition(thread(), run({ stage: "review", handoff: { verdict: "pass" } as never, checks: [{ status: "fail" } as never] }), settings)).toMatchObject({ kind: "advance", sendBack: true });
-    expect(nextTransition(thread(), run({ stage: "review" }), settings)).toMatchObject({ kind: "violation", rule: "检查没有给出结论" });
-    expect(nextTransition(thread({ hops: 6 }), run({ stage: "implement" }), settings)).toMatchObject({ kind: "violation", rule: "接力跳数已达上限" });
-    expect(nextTransition(thread({ stalls: 2 }), run({ stage: "implement" }), settings)).toMatchObject({ kind: "violation", rule: "连续空转" });
-    expect(nextTransition(thread(), run({ stage: "plan", proposedNext: { stage: "plan", reason: "", acceptance: ["a"] } }), settings)).toMatchObject({ kind: "violation" });
-    expect(nextTransition(thread(), run({ status: "failed", error: "boom" }), settings)).toMatchObject({ kind: "pause" });
-  });
-
-  it("detects stalls", () => {
-    expect(isStall(run({}))).toBe(true);
-    expect(isStall(run({ changedFiles: ["a"] }))).toBe(false);
-    expect(isStall(run({ decisions: 1 }))).toBe(false);
-  });
-});
-
 describe("workspace, memory, lessons and briefing", () => {
   it("initializes the workspace and maintains AGENTS.md idempotently", () => {
     const root = tempDir();
@@ -323,8 +183,19 @@ describe("workspace, memory, lessons and briefing", () => {
     const text = fs.readFileSync(path.join(root, "AGENTS.md"), "utf8");
     expect(text).toContain("Keep this.");
     expect(text.match(/baton:begin/g)).toHaveLength(1);
-    expect(ws.listAgents().length).toBeGreaterThan(3);
-    expect(ws.listAgents().filter((a) => a.source === "demo").every((a) => !a.enabled)).toBe(true);
+    expect(fs.existsSync(ws.path("agents"))).toBe(false);
+  });
+
+  it("replaces relay-era default rules and drops the relay-only ones, keeping rules the user wrote", () => {
+    const root = tempDir();
+    const ws = Workspace.open(root);
+    fs.writeFileSync(ws.path("rules", "base.md"), "# 旧规则\n按阶段接力：方案 → 实现 → 检查\n");
+    fs.writeFileSync(ws.path("rules", "role-plan.md"), "# 角色：方案\n");
+    fs.writeFileSync(ws.path("rules", "role-chat.md"), "# 我自己的对话规则\n");
+    Workspace.open(root);
+    expect(fs.readFileSync(ws.path("rules", "base.md"), "utf8")).toBe(RULE_FILES["base.md"]);
+    expect(fs.existsSync(ws.path("rules", "role-plan.md"))).toBe(false);
+    expect(fs.readFileSync(ws.path("rules", "role-chat.md"), "utf8")).toBe("# 我自己的对话规则\n");
   });
 
   it("rejects duplicate memories and supersedes instead of overwriting", () => {
@@ -351,15 +222,17 @@ describe("workspace, memory, lessons and briefing", () => {
 
   it("composes the briefing by role × runtime in a fixed order with budget and hash", () => {
     const ws = Workspace.open(tempDir(), { demo: true });
-    const a = ws.getAgent("demo-coder")!;
-    const b = compileBriefing({ ws, agent: a, role: "implement", task: "do it", acceptance: ["x"] });
-    expect(b.sections.map((s) => s.key)).toEqual(["base", "role", "runtime", "agent", "context", "task"]);
-    expect(b.budget).toBe(12 * 1024);
-    expect(b.overBudget).toBe(false);
-    expect(b.text).toContain("你不能决定交给谁");
-    expect(b.hash).toMatch(/^[0-9a-f]{64}$/);
-    const advisor = compileBriefing({ ws, agent: ws.getAgent("demo-advisor")!, role: "advisor", thread: thread({ summary: "secret history" }) });
-    expect(advisor.text).not.toContain("secret history");
-    expect(advisor.budget).toBe(24 * 1024);
+    const chat = compileBriefing({ ws, agent: runAgent({ source: "demo", model: "demo-chat", name: "对话" }, accessPermissions("read")), role: "chat", task: "你好" });
+    expect(chat.sections.map((s) => s.key)).toEqual(["base", "role", "runtime", "context", "task"]);
+    expect(chat.budget).toBe(24 * 1024);
+    expect(chat.overBudget).toBe(false);
+    expect(chat.text).toContain("只读，不能改文件");
+    expect(chat.hash).toMatch(/^[0-9a-f]{64}$/);
+    const t = thread({ summary: "- 用户：早先的话题 → 演示：好" });
+    const review = compileBriefing({ ws, agent: runAgent({ source: "demo", model: "demo-review", name: "检查" }, REVIEW_PERMISSIONS), role: "review", thread: t, task: "写周报", extra: "## 改动的文件\n- notes/a.md" });
+    expect(review.sections.map((s) => s.key)).toEqual(["base", "role", "runtime", "context", "thread", "task"]);
+    expect(review.text).toContain("submit_review");
+    expect(review.text).toContain("早先的话题");
+    expect(review.text).toContain("notes/a.md");
   });
 });

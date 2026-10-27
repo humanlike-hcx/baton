@@ -1,17 +1,16 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Bot, BookText, ChartColumn, FolderOpen, Menu, MessagesSquare, Plus, Settings, Wifi, WifiOff } from "lucide-react";
+import { Bot, BookText, Boxes, ChartColumn, FolderOpen, Menu, Plus, Settings, Wifi, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { STAGE_LABEL, statusLabel, timeAgo } from "@/lib/format";
+import { STATUS_LABEL, timeAgo } from "@/lib/format";
 import { href, type Route } from "@/lib/router";
 import { useBaton } from "@/lib/store";
 
 const NAV: { route: Route; label: string; icon: typeof Bot; match: Route["page"][] }[] = [
-  { route: { page: "threads" }, label: "线程", icon: MessagesSquare, match: ["threads", "new"] },
-  { route: { page: "agents" }, label: "Agents", icon: Bot, match: ["agents"] },
+  { route: { page: "models" }, label: "模型", icon: Boxes, match: ["models"] },
   { route: { page: "context" }, label: "上下文与记忆", icon: BookText, match: ["context"] },
   { route: { page: "stats" }, label: "统计", icon: ChartColumn, match: ["stats"] },
   { route: { page: "settings" }, label: "设置", icon: Settings, match: ["settings"] },
@@ -22,7 +21,6 @@ const STATUS_DOT: Record<string, string> = {
   running: "bg-sky-500 animate-pulse",
   waiting: "bg-amber-500",
   paused: "bg-zinc-400",
-  done: "bg-emerald-500",
 };
 
 function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void }) {
@@ -42,7 +40,7 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
         </div>
         <div className="min-w-0">
           <div className="text-sm font-semibold leading-tight">Baton</div>
-          <div className="text-xs text-muted-foreground">个人 agent 工作台</div>
+          <div className="text-xs text-muted-foreground">多模型对话工作台</div>
         </div>
       </div>
 
@@ -64,15 +62,15 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
 
       <div className="px-3">
         <Button asChild className="w-full justify-start" onClick={onNavigate}>
-          <a href={href({ page: "new" })}>
-            <Plus /> 新线程
+          <a href={href({ page: "threads" })}>
+            <Plus /> 新对话
           </a>
         </Button>
       </div>
 
       <nav className="mt-3 space-y-0.5 px-3">
         {NAV.map((item) => {
-          const active = item.match.includes(route.page) && !(item.route.page === "threads" && activeThread);
+          const active = item.match.includes(route.page);
           return (
             <a
               key={item.label}
@@ -90,9 +88,9 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
         })}
       </nav>
 
-      <div className="mt-4 px-5 text-xs font-medium text-muted-foreground">最近的线程</div>
+      <div className="mt-4 px-5 text-xs font-medium text-muted-foreground">历史对话</div>
       <ScrollArea className="mt-1 min-h-0 flex-1 px-3">
-        {state && state.threads.length === 0 && <p className="px-2 py-3 text-xs text-muted-foreground">还没有线程。点「新线程」交给 agent 一件事。</p>}
+        {state && state.threads.length === 0 && <p className="px-2 py-3 text-xs text-muted-foreground">还没有对话。在右边的输入框里说第一句话。</p>}
         <div className="space-y-0.5 pb-3">
           {state?.threads.map((t) => (
             <a
@@ -109,10 +107,14 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
                 <span className="truncate text-sm">{t.title}</span>
               </div>
               <div className="mt-0.5 flex items-center gap-1.5 pl-4 text-xs text-muted-foreground">
-                <span>{STAGE_LABEL[t.stage]}</span>
-                <span>·</span>
-                <span>{t.pending ? "等你确认" : statusLabel(t)}</span>
-                <span className="ml-auto">{timeAgo(t.updatedAt)}</span>
+                <span className="truncate">{t.model?.name ?? "未选模型"}</span>
+                {t.status !== "idle" && (
+                  <>
+                    <span>·</span>
+                    <span className="shrink-0">{STATUS_LABEL[t.status]}</span>
+                  </>
+                )}
+                <span className="ml-auto shrink-0">{timeAgo(t.updatedAt)}</span>
               </div>
             </a>
           ))}
@@ -120,7 +122,7 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
       </ScrollArea>
 
       <div className="border-t px-4 py-3">
-        <a href={href({ page: "settings", tab: "accounts" })} onClick={onNavigate} className="flex flex-wrap items-center gap-1.5">
+        <a href={href({ page: "models" })} onClick={onNavigate} className="flex flex-wrap items-center gap-1.5">
           {accounts.map((a) => (
             <span
               key={a.label}

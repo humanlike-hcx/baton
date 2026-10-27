@@ -42,20 +42,16 @@ server.registerTool(
 );
 
 server.registerTool(
-  "write_handoff",
+  "submit_review",
   {
-    title: "写交接",
-    description: "结束前写交接：做了什么、改了哪些文件、还剩什么、建议下一步。检查角色必须给出 verdict（pass / fail），fail 时在 issues 里逐条列问题。",
+    title: "给出检查结论",
+    description: "检查结束前调用一次：没有问题写 pass，否则写 fail，并在 issues 里逐条列出问题（文件、位置、原因）。检查命令失败时不能写 pass。",
     inputSchema: {
-      done: z.string(),
-      files: z.array(z.string()).optional(),
-      remaining: z.string().optional(),
-      next: z.string().optional(),
-      verdict: z.enum(["pass", "fail"]).optional(),
+      verdict: z.enum(["pass", "fail"]),
       issues: z.array(z.string()).optional(),
     },
   },
-  async (args) => reply("write_handoff", args),
+  async (args) => reply("submit_review", args),
 );
 
 await server.connect(new StdioServerTransport());

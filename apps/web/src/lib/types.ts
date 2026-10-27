@@ -1,17 +1,16 @@
 export type {
-  AgentCard,
   AuthStatus,
   Briefing,
+  ChatAccess,
+  ChatModel,
   CheckResult,
-  Handoff,
+  CredentialSource,
   Lesson,
   MemoryEntry,
-  PendingDecision,
+  ReviewVerdict,
   Role,
   RunRecord,
-  Stage,
   Thread,
-  ThreadKind,
   ThreadStatus,
   TidyRecord,
   TidyStatus,
@@ -19,22 +18,15 @@ export type {
   WorkspaceSettings,
 } from "@baton/core/types";
 
-import type { AgentCard, AuthStatus, Stage, ThreadKind, ThreadStatus, WorkspaceSettings } from "@baton/core/types";
-
-export interface AgentView extends AgentCard {
-  available: boolean;
-  routeError?: string;
-}
+import type { AuthStatus, ChatModel, CredentialSource, ThreadStatus, WorkspaceSettings } from "@baton/core/types";
 
 export interface ThreadSummary {
   id: string;
-  kind: ThreadKind;
   title: string;
-  stage: Stage;
   status: ThreadStatus;
   updatedAt: string;
-  pending?: string;
   runs: number;
+  model?: ChatModel;
 }
 
 export interface AppStateResponse {
@@ -42,7 +34,6 @@ export interface AppStateResponse {
   recent: string[];
   auth: AuthStatus;
   settings: WorkspaceSettings;
-  agents: AgentView[];
   threads: ThreadSummary[];
   mockCursorCommand: string;
 }
@@ -51,25 +42,31 @@ export interface ModelOption {
   id: string;
   name: string;
   contextWindow?: number;
+  family: string;
 }
 
-export interface ModelsResponse {
-  chatgpt: ModelOption[];
-  deepseek: ModelOption[];
-  cursor: ModelOption[];
-  cursorError?: string;
+/** One account route from `/api/models`: why it can't be used right now (if so), and every model it offers. */
+export interface ModelRoute {
+  source: CredentialSource;
+  label: string;
+  unavailable?: string;
+  error?: string;
+  models: ModelOption[];
 }
 
 export interface StatRow {
   key: string;
   runtime: string;
+  source: CredentialSource;
   model: string;
   family: string;
   runs: number;
+  succeeded: number;
+  failed: number;
+  changes: number;
+  reviewsGiven: number;
+  reviewedPass: number;
+  reviewedFail: number;
   costUsd: number;
   tokens: number;
-  stages: Partial<Record<Stage, { runs: number; succeeded: number; firstPass: number; sentBack: number }>>;
-  agentIds: string[];
-  accepted: number;
-  declined: number;
 }

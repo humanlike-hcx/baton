@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 
+/** `threads` without an id is a new chat: what Baton opens into. */
 export type Route =
   | { page: "threads"; threadId?: string }
-  | { page: "new" }
-  | { page: "agents" }
+  | { page: "models" }
   | { page: "context"; tab?: string }
   | { page: "stats" }
   | { page: "settings"; tab?: string };
@@ -13,16 +13,15 @@ export function parseHash(hash: string): Route {
   switch (parts[0]) {
     case "threads":
       return { page: "threads", threadId: parts[1] };
-    case "new":
-      return { page: "new" };
+    case "models":
     case "agents":
-      return { page: "agents" };
+      return { page: "models" };
     case "context":
       return { page: "context", tab: parts[1] };
     case "stats":
       return { page: "stats" };
     case "settings":
-      return { page: "settings", tab: parts[1] };
+      return parts[1] === "accounts" ? { page: "models" } : { page: "settings", tab: parts[1] };
     default:
       return { page: "threads" };
   }
@@ -31,7 +30,7 @@ export function parseHash(hash: string): Route {
 export function href(route: Route): string {
   switch (route.page) {
     case "threads":
-      return route.threadId ? `#/threads/${route.threadId}` : "#/threads";
+      return route.threadId ? `#/threads/${route.threadId}` : "#/";
     case "context":
       return route.tab ? `#/context/${route.tab}` : "#/context";
     case "settings":

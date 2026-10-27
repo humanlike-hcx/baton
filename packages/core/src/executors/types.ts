@@ -1,13 +1,12 @@
 import type { ToolContext, ToolSpec } from "../tools.ts";
-import type { AgentCard, Briefing, Risk, Role, Thread, Usage } from "../types.ts";
+import type { Briefing, Risk, Role, RunAgent, Thread, Usage } from "../types.ts";
 
 export type ExecutorEvent =
   | { type: "text_delta"; delta: string; thinking?: boolean }
   | { type: "text_end" }
   | { type: "tool_start"; id: string; tool: string; args: unknown }
   | { type: "tool_end"; id: string; tool: string; ok: boolean; result: string }
-  | { type: "notice"; level: "info" | "warn" | "error"; text: string }
-  | { type: "compaction"; summary: string };
+  | { type: "notice"; level: "info" | "warn" | "error"; text: string };
 
 export interface McpLaunch {
   command: string;
@@ -17,7 +16,7 @@ export interface McpLaunch {
 
 export interface ExecuteRequest {
   runId: string;
-  agent: AgentCard;
+  agent: RunAgent;
   role: Role;
   thread?: Thread;
   briefing: Briefing;
@@ -29,7 +28,8 @@ export interface ExecuteRequest {
   signal: AbortSignal;
   emit(event: ExecutorEvent): void;
   requestApproval(req: { risk: Risk; title: string; preview: string }): Promise<boolean>;
-  hasHandoff(): boolean;
+  /** A review run has called submit_review. */
+  hasVerdict(): boolean;
   mcp?: McpLaunch;
   cursorCommand?: string;
 }
@@ -45,10 +45,4 @@ export interface Executor {
   run(req: ExecuteRequest): Promise<ExecuteResult>;
 }
 
-/** Advisors only advise; chat handoffs are recorded from the reply. Neither gets the reminder. */
-export function expectsHandoff(role: Role): boolean {
-  return role !== "advisor" && role !== "chat";
-}
-
-export const HANDOFF_REMINDER =
-  "你还没有调用 write_handoff。请现在调用一次：做了什么、改了哪些文件、还剩什么、建议下一步（检查角色要给出 verdict）。不要再做别的事。";
+export const VERDICT_REMINDER = "你还没有调用 submit_review。请现在调用一次给出结论：pass，或 fail 并逐条列出问题。不要再做别的事。";

@@ -1,275 +1,23 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { CheckCircle2, Circle, ExternalLink, FolderOpen, Loader2, Play, Plus, RefreshCw, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { FolderOpen, Loader2, Play, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { del, post, put } from "@/lib/api";
+import { post, put } from "@/lib/api";
 import { kb } from "@/lib/format";
 import { navigate } from "@/lib/router";
 import { useBaton } from "@/lib/store";
 import type { CheckResult, WorkspaceSettings } from "@/lib/types";
+import { Section, useBusy } from "./section";
 
 function errorToast(e: unknown) {
   toast.error((e as Error).message);
-}
-
-function Section({ title, description, children, status }: { title: string; description?: ReactNode; children: ReactNode; status?: ReactNode }) {
-  return (
-    <section className="rounded-xl border p-4 sm:p-5">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h2 className="font-medium">{title}</h2>
-          {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
-        </div>
-        {status}
-      </div>
-      <div className="mt-4">{children}</div>
-    </section>
-  );
-}
-
-function StatusPill({ ok, label }: { ok: boolean; label: string }) {
-  return (
-    <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs", ok ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "text-muted-foreground")}>
-      {ok ? <CheckCircle2 className="size-3.5" /> : <Circle className="size-3.5" />}
-      {label}
-    </span>
-  );
-}
-
-function useBusy() {
-  const [busy, setBusy] = useState<string>();
-  const run = async (key: string, fn: () => Promise<unknown>) => {
-    setBusy(key);
-    try {
-      await fn();
-    } catch (e) {
-      errorToast(e);
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  return { busy, run };
-}
-
-function AccountsTab() {
-  const { state, refresh } = useBaton();
-  const { busy, run } = useBusy();
-  const [manual, setManual] = useState("");
-  const [deepseekKey, setDeepseekKey] = useState("");
-  const keyMalformed = deepseekKey.trim() !== "" && !/^sk-[A-Za-z0-9_-]{16,}$/.test(deepseekKey.trim());
-  const [cursorCommand, setCursorCommand] = useState("");
-  const auth = state?.auth;
-  const settings = state?.settings;
-
-  useEffect(() => {
-    if (settings) setCursorCommand(settings.cursor.command);
-  }, [settings?.cursor.command]);
-
-  useEffect(() => {
-    if (!auth?.chatgpt.pending && !auth?.cursor.pending) return;
-    const timer = window.setInterval(() => void refresh(), 2500);
-    return () => window.clearInterval(timer);
-  }, [auth?.chatgpt.pending, auth?.cursor.pending, refresh]);
-
-  if (!auth || !settings || !state) return null;
-  const usingMock = settings.cursor.command === state.mockCursorCommand;
-
-  const saveCursorCommand = (command: string) =>
-    run("cursor-cmd", async () => {
-      await put("/api/settings", { ...settings, cursor: { command } });
-      await refresh();
-      toast.success("已更新 Cursor 命令");
-    });
-
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        用你已有的订阅登录，不用 API key（DeepSeek 除外）。凭据只保存在本机 <code className="rounded bg-muted px-1">~/.baton/credentials.json</code>（权限 0600），不会发给浏览器或工具。
-      </p>
-
-      <Section
-        title="ChatGPT"
-        description="GPT 系模型只从这里接入，跑在 Pi 运行时里。Cursor 里的 GPT 模型不会出现，避免重复。"
-        status={<StatusPill ok={auth.chatgpt.loggedIn} label={auth.chatgpt.loggedIn ? (auth.chatgpt.method === "codex" ? "已登录 · Codex 账号" : "已登录") : "未登录"} />}
-      >
-        {auth.chatgpt.error && !auth.chatgpt.pending && !auth.chatgpt.loggedIn && (
-          <div className="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
-            登录失败：{auth.chatgpt.error}
-            <div className="mt-1 text-xs text-muted-foreground">如果这个账号能登录 Codex CLI，可以改用「用 Codex 账号登录」。</div>
-          </div>
-        )}
-        {auth.chatgpt.pending ? (
-          <div className="space-y-3">
-            <p className="text-sm">
-              在浏览器里打开下面的链接完成登录。登录完成后会自动跳回本机 1455 端口。
-            </p>
-            <a href={auth.chatgpt.pending.url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 break-all rounded-lg border bg-muted/40 px-3 py-2 font-mono text-xs text-primary hover:underline">
-              <ExternalLink className="size-3.5 shrink-0" />
-              {auth.chatgpt.pending.url}
-            </a>
-            <div className="space-y-1.5">
-              <Label htmlFor="manual" className="text-xs text-muted-foreground">
-                如果浏览器跳转失败（比如工作台跑在另一台机器上），把地址栏里最后的 …:1455/auth/callback… 整个链接粘贴到这里：
-              </Label>
-              <div className="flex gap-2">
-                <Input id="manual" value={manual} onChange={(e) => setManual(e.target.value)} placeholder="http://127.0.0.1:1455/auth/callback?code=…" className="font-mono text-xs" />
-                <Button
-                  disabled={!manual.trim() || busy === "manual"}
-                  onClick={() =>
-                    run("manual", async () => {
-                      await post("/api/auth/chatgpt/manual", { input: manual });
-                      setManual("");
-                      toast.success("已提交，正在完成登录…");
-                    })
-                  }
-                >
-                  提交
-                </Button>
-              </div>
-            </div>
-            <Button variant="ghost" size="sm" onClick={() => run("cancel", async () => (await post("/api/auth/chatgpt/cancel"), refresh()))}>
-              取消登录
-            </Button>
-          </div>
-        ) : auth.chatgpt.loggedIn ? (
-          <Button variant="outline" disabled={busy === "logout"} onClick={() => run("logout", async () => (await post("/api/auth/chatgpt/logout"), refresh()))}>
-            退出登录
-          </Button>
-        ) : (
-          <div className="space-y-2">
-            <div className="flex flex-wrap gap-2">
-              {(
-                [
-                  ["chatgpt", "用 ChatGPT 登录", "default"],
-                  ["codex", "用 Codex 账号登录", "outline"],
-                ] as const
-              ).map(([method, label, variant]) => (
-                <Button
-                  key={method}
-                  variant={variant}
-                  disabled={Boolean(busy?.startsWith("login"))}
-                  onClick={() =>
-                    run(`login-${method}`, async () => {
-                      const { url } = await post<{ url: string }>("/api/auth/chatgpt/login", { method });
-                      window.open(url, "_blank", "noopener");
-                      await refresh();
-                    })
-                  }
-                >
-                  {busy === `login-${method}` && <Loader2 className="animate-spin" />}
-                  {label}
-                </Button>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">两种方式都用你的 ChatGPT 订阅。「Codex 账号」和 Codex CLI 是同一套登录，Sign in with ChatGPT 对你的账号不可用时用它。</p>
-          </div>
-        )}
-      </Section>
-
-      <Section
-        title="Cursor"
-        description="Cursor 订阅里的非 GPT 模型（Claude、Gemini、Composer…）通过官方 Cursor Agent CLI 的 ACP 模式接入，每个模型是独立的 agent。"
-        status={<StatusPill ok={auth.cursor.loggedIn} label={auth.cursor.loggedIn ? auth.cursor.account ?? "已登录" : auth.cursor.installed ? "未登录" : "未安装 CLI"} />}
-      >
-        <div className="space-y-3">
-          {!auth.cursor.installed && (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
-              没找到 Cursor Agent CLI。安装：<code className="rounded bg-muted px-1">curl https://cursor.com/install -fsS | bash</code>，装好后点「重新检测」。
-              {auth.cursor.error && <div className="mt-1 text-xs text-muted-foreground">{auth.cursor.error}</div>}
-            </div>
-          )}
-          {auth.cursor.pending && (
-            <a href={auth.cursor.pending.url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 break-all rounded-lg border bg-muted/40 px-3 py-2 font-mono text-xs text-primary hover:underline">
-              <ExternalLink className="size-3.5 shrink-0" />
-              {auth.cursor.pending.url}
-            </a>
-          )}
-          <div className="flex flex-wrap gap-2">
-            {auth.cursor.installed && !auth.cursor.loggedIn && (
-              <Button
-                disabled={busy === "cursor-login"}
-                onClick={() =>
-                  run("cursor-login", async () => {
-                    const { url } = await post<{ url: string }>("/api/auth/cursor/login");
-                    if (url) window.open(url, "_blank", "noopener");
-                    await refresh();
-                  })
-                }
-              >
-                {busy === "cursor-login" && <Loader2 className="animate-spin" />}登录 Cursor
-              </Button>
-            )}
-            <Button variant="outline" disabled={busy === "cursor-refresh"} onClick={() => run("cursor-refresh", async () => (await post("/api/auth/cursor/refresh"), refresh()))}>
-              <RefreshCw className={cn(busy === "cursor-refresh" && "animate-spin")} /> 重新检测
-            </Button>
-          </div>
-          <div className="space-y-1.5 border-t pt-3">
-            <Label htmlFor="cursor-cmd" className="text-xs text-muted-foreground">
-              CLI 命令（当前工作区）
-            </Label>
-            <div className="flex gap-2">
-              <Input id="cursor-cmd" value={cursorCommand} onChange={(e) => setCursorCommand(e.target.value)} className="font-mono text-xs" />
-              <Button variant="outline" disabled={cursorCommand === settings.cursor.command || busy === "cursor-cmd"} onClick={() => saveCursorCommand(cursorCommand)}>
-                保存
-              </Button>
-            </div>
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Switch size="sm" checked={usingMock} onCheckedChange={(on) => saveCursorCommand(on ? state.mockCursorCommand : "agent")} />
-              用内置的模拟 Cursor（没装 CLI 时体验 ACP 流程，不会调用真实模型）
-            </label>
-          </div>
-        </div>
-      </Section>
-
-      <Section
-        title="DeepSeek"
-        description="唯一用 API key 的来源，用于便宜的实现任务和交接摘要。按实际花费计入每个线程的预算。"
-        status={<StatusPill ok={auth.deepseek.configured} label={auth.deepseek.configured ? "已配置" : "未配置"} />}
-      >
-        {auth.deepseek.configured ? (
-          <Button variant="outline" disabled={busy === "ds-clear"} onClick={() => run("ds-clear", async () => (await del("/api/auth/deepseek"), refresh()))}>
-            移除 key
-          </Button>
-        ) : (
-          <div className="space-y-1.5">
-            <div className="flex gap-2">
-              <Input
-                type="password"
-                value={deepseekKey}
-                onChange={(e) => setDeepseekKey(e.target.value)}
-                placeholder="sk-…"
-                autoComplete="off"
-                aria-invalid={keyMalformed}
-                className="font-mono"
-              />
-              <Button
-                disabled={!deepseekKey.trim() || keyMalformed || busy === "ds"}
-                onClick={() =>
-                  run("ds", async () => {
-                    await post("/api/auth/deepseek", { key: deepseekKey });
-                    setDeepseekKey("");
-                    await refresh();
-                    toast.success("已保存 DeepSeek key");
-                  })
-                }
-              >
-                保存
-              </Button>
-            </div>
-            {keyMalformed && <p className="text-xs text-destructive">格式不对：DeepSeek key 以 sk- 开头，后面至少 16 位字母、数字、- 或 _。</p>}
-          </div>
-        )}
-      </Section>
-    </div>
-  );
 }
 
 function WorkspaceTab() {
@@ -289,7 +37,7 @@ function WorkspaceTab() {
 
   return (
     <div className="space-y-4">
-      <Section title="当前工作区" description="所有 agent 在这个目录里读写同一批文件。工作台的状态保存在其中的 .baton/ 目录。">
+      <Section title="当前工作区" description="所有对话里的模型在这个目录里读写同一批文件。工作台的状态保存在其中的 .baton/ 目录。">
         <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2">
           <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate font-mono text-xs">{state.workspace.root}</span>
@@ -391,7 +139,7 @@ function ChecksTab() {
     <div className="space-y-4">
       <Section
         title="检查命令"
-        description="检查阶段开始前，工作台先在工作区跑这些命令（测试、类型检查、lint…）。有失败时，检查者不能判通过——硬规则，不靠模型自觉。"
+        description="「让另一个模型检查」时，工作台先在工作区跑这些命令（测试、类型检查、lint…）。有失败时，结论不能是通过——硬规则，不靠模型自觉。"
       >
         <div className="space-y-3">
           {draft.checks.length === 0 && <p className="text-sm text-muted-foreground">还没有检查命令。至少加一个能证明改动没坏的命令。</p>}
@@ -455,67 +203,31 @@ function ToggleRow({ label, hint, checked, onChange }: { label: string; hint?: s
   );
 }
 
-function RelayTab() {
+function BudgetsTab() {
   const { draft, setDraft, ...bar } = useSettingsDraft();
   if (!draft) return null;
-  const limits = (patch: Partial<WorkspaceSettings["limits"]>) => setDraft({ ...draft, limits: { ...draft.limits, ...patch } });
+  const budgets = (patch: Partial<WorkspaceSettings["budgets"]>) => setDraft({ ...draft, budgets: { ...draft.budgets, ...patch } });
   return (
     <div className="space-y-4">
-      <Section title="需要你确认的节点" description="其余交接由工作台按规则自动完成。">
-        <div className="divide-y">
-          <ToggleRow label="方案 → 实现前确认" hint="看过方案和验收标准再开工，也是你批准写权限的时刻。" checked={draft.confirm.planToImplement} onChange={(v) => setDraft({ ...draft, confirm: { ...draft.confirm, planToImplement: v } })} />
-          <ToggleRow label="检查通过后确认完成" hint="关掉则检查通过且命令全绿时自动收尾。" checked={draft.confirm.complete} onChange={(v) => setDraft({ ...draft, confirm: { ...draft.confirm, complete: v } })} />
-        </div>
-      </Section>
-      <Section title="顾问" description="一个干净上下文、只读的强模型，只在特定时刻被请来给建议，不直接动手。">
-        <div className="divide-y">
-          <ToggleRow label="第二次被退回时" checked={draft.advisor.onSecondSendBack} onChange={(v) => setDraft({ ...draft, advisor: { ...draft.advisor, onSecondSendBack: v } })} />
-          <ToggleRow label="同类问题反复出现时" checked={draft.advisor.onRepeatedIssues} onChange={(v) => setDraft({ ...draft, advisor: { ...draft.advisor, onRepeatedIssues: v } })} />
-          <ToggleRow label="出方案之前" hint="多一次调用，换一个独立视角。" checked={draft.advisor.beforePlan} onChange={(v) => setDraft({ ...draft, advisor: { ...draft.advisor, beforePlan: v } })} />
-        </div>
-      </Section>
-      <Section title="接力上限" description="超过任何一项就暂停，交给你决定。">
-        <div className="grid gap-4 sm:grid-cols-3">
-          <NumberField label="每线程最多交接" value={draft.limits.maxHops} onChange={(n) => limits({ maxHops: n })} min={1} />
-          <NumberField label="最多退回" value={draft.limits.maxSendBacks} onChange={(n) => limits({ maxSendBacks: n })} />
-          <NumberField label="连续无进展" value={draft.limits.maxStalls} onChange={(n) => limits({ maxStalls: n })} hint="没有改动文件的运行" min={1} />
-        </div>
-      </Section>
-      <Section title="额度与预算" description="每个线程的上限，按账号分别计算。">
-        <div className="grid gap-4 sm:grid-cols-3">
-          <NumberField label="DeepSeek 花费（元）" value={draft.limits.deepseekCnyPerThread} onChange={(n) => limits({ deepseekCnyPerThread: n })} step={0.5} />
-          <NumberField label="ChatGPT 运行次数" value={draft.limits.chatgptRunsPerThread} onChange={(n) => limits({ chatgptRunsPerThread: n })} />
-          <NumberField label="Cursor 运行次数" value={draft.limits.cursorRunsPerThread} onChange={(n) => limits({ cursorRunsPerThread: n })} />
-        </div>
-      </Section>
-      <Section title="启动上下文预算" description="每次运行注入的规则、上下文、记忆和交接的总量上限。超了就拦下，提醒你精简，而不是悄悄截断。房间上下文超过自己的预算时，整理员（DeepSeek）会自动整理。">
-        <div className="grid gap-4 sm:grid-cols-3">
-          <NumberField
-            label="方案/顾问（字节）"
-            value={draft.budgets.planner}
-            onChange={(n) => setDraft({ ...draft, budgets: { ...draft.budgets, planner: n } })}
-            step={1024}
-            min={2048}
-            hint={kb(draft.budgets.planner)}
-          />
-          <NumberField
-            label="实现/检查（字节）"
-            value={draft.budgets.executor}
-            onChange={(n) => setDraft({ ...draft, budgets: { ...draft.budgets, executor: n } })}
-            step={1024}
-            min={2048}
-            hint={kb(draft.budgets.executor)}
-          />
+      <Section
+        title="启动上下文预算"
+        description="每次回复或检查开场注入的规则、上下文、记忆和对话摘要的总量上限。超了就拦下，提醒你精简，而不是悄悄截断。房间上下文超过自己的预算时，整理员（DeepSeek）会自动整理。"
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <NumberField label="启动上下文（字节）" value={draft.budgets.briefing} onChange={(n) => budgets({ briefing: n })} step={1024} min={2048} hint={kb(draft.budgets.briefing)} />
           <NumberField
             label="房间上下文（字节）"
             value={draft.budgets.context}
-            onChange={(n) => setDraft({ ...draft, budgets: { ...draft.budgets, context: n } })}
+            onChange={(n) => budgets({ context: n })}
             step={512}
             min={1024}
             max={8192}
             hint={`${kb(draft.budgets.context)}，上限 8KB`}
           />
         </div>
+      </Section>
+      <Section title="记忆" description="关掉后模型和整理员都不能再写新的记忆；已有的记忆照常可查。">
+        <ToggleRow label="启用记忆" checked={draft.memory.enabled} onChange={(v) => setDraft({ ...draft, memory: { enabled: v } })} />
       </Section>
       <SaveBar {...bar} />
     </div>
@@ -530,34 +242,14 @@ function PermissionsTab() {
   const { draft, setDraft, ...bar } = useSettingsDraft();
   if (!draft) return null;
   const perms = (patch: Partial<WorkspaceSettings["permissions"]>) => setDraft({ ...draft, permissions: { ...draft.permissions, ...patch } });
-  const policy = (key: "exec" | "network", label: string, hint: string) => (
-    <div className="space-y-1">
-      <Label>{label}</Label>
-      <Select value={draft.permissions[key]} onValueChange={(v) => perms({ [key]: v })}>
-        <SelectTrigger className="w-40">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="allow">直接允许</SelectItem>
-          <SelectItem value="ask">每次问我</SelectItem>
-          <SelectItem value="deny">禁止</SelectItem>
-        </SelectContent>
-      </Select>
-      <p className="text-xs text-muted-foreground">{hint}</p>
-    </div>
-  );
   return (
     <div className="space-y-4">
-      <Section title="默认策略" description="工作区级别的上限；单个 agent 的权限只能更严，不能更松。">
-        <div className="grid gap-4 sm:grid-cols-2">
-          {policy("exec", "运行命令", "不在白名单里的命令按这个处理。")}
-          {policy("network", "联网", "Cursor 发起的网络请求。")}
-        </div>
-        <div className="mt-4 max-w-xs">
-          <NumberField label="审批等待（秒）" value={draft.approvalTimeoutSec} onChange={(n) => setDraft({ ...draft, approvalTimeoutSec: n })} hint="超时视为拒绝。" min={10} />
+      <Section title="审批" description="每个对话用输入框旁的开关设定权限（只读 / 每次问我 / 允许直接改）。下面的黑名单和禁止访问的路径在任何档位下都生效。">
+        <div className="max-w-xs">
+          <NumberField label="审批等待（秒）" value={draft.approvalTimeoutSec} onChange={(n) => setDraft({ ...draft, approvalTimeoutSec: n })} hint="「每次问我」时等你决定的时间，超时视为拒绝。" min={10} />
         </div>
       </Section>
-      <Section title="命令白名单与黑名单" description="一行一个前缀。白名单只对不含管道、重定向、分号等符号的简单命令生效；黑名单永远优先。">
+      <Section title="命令白名单与黑名单" description="一行一个前缀。「每次问我」时白名单里的简单命令（不含管道、重定向、分号等符号）不用问；黑名单永远优先，任何档位都禁止。">
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
             <Label className="text-sm">直接允许</Label>
@@ -569,7 +261,7 @@ function PermissionsTab() {
           </div>
         </div>
       </Section>
-      <Section title="禁止访问的路径" description="glob 写法，相对工作区。agent 读写都会被拒绝；.baton/ 本身总是只读。">
+      <Section title="禁止访问的路径" description="glob 写法，相对工作区。模型读写都会被拒绝；.baton/ 本身总是只读。">
         <ListEditor value={draft.permissions.denyPaths} onChange={(v) => perms({ denyPaths: v })} placeholder={".env*\n**/*.pem\nsecrets/**"} />
       </Section>
       <SaveBar {...bar} />
@@ -578,16 +270,15 @@ function PermissionsTab() {
 }
 
 const TABS = [
-  { value: "accounts", label: "账号" },
   { value: "workspace", label: "工作区" },
   { value: "checks", label: "检查命令" },
-  { value: "relay", label: "接力规则" },
+  { value: "budgets", label: "上下文预算" },
   { value: "permissions", label: "权限" },
 ];
 
 export function SettingsPage({ tab }: { tab?: string }) {
   const { state, error } = useBaton();
-  const active = TABS.some((t) => t.value === tab) ? tab! : "accounts";
+  const active = TABS.some((t) => t.value === tab) ? tab! : "workspace";
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
@@ -603,17 +294,14 @@ export function SettingsPage({ tab }: { tab?: string }) {
               ))}
             </TabsList>
           </div>
-          <TabsContent value="accounts" className="mt-4">
-            <AccountsTab />
-          </TabsContent>
           <TabsContent value="workspace" className="mt-4">
             <WorkspaceTab />
           </TabsContent>
           <TabsContent value="checks" className="mt-4">
             <ChecksTab />
           </TabsContent>
-          <TabsContent value="relay" className="mt-4">
-            <RelayTab />
+          <TabsContent value="budgets" className="mt-4">
+            <BudgetsTab />
           </TabsContent>
           <TabsContent value="permissions" className="mt-4">
             <PermissionsTab />

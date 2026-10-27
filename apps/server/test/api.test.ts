@@ -4,38 +4,6 @@ import { describe, expect, it } from "vitest";
 import { allowWebSocket } from "../src/app.ts";
 import { testServer } from "./helpers.ts";
 
-describe("HTTP API: relay threads", () => {
-  it("runs a demo relay thread from creation to done", async () => {
-    const s = await testServer();
-    const created = await s.post("/api/threads", { title: "写一份周报模板", task: "写一份周报模板", acceptance: ["包含本周进展和下周计划"] });
-
-    let t = await s.settled(created.id);
-    expect(t.pending?.kind).toBe("start_stage");
-    await s.post(`/api/threads/${t.id}/decisions/${t.pending!.id}`, { approve: true });
-
-    t = await s.settled(t.id);
-    expect(t.runs.map((r) => r.stage)).toEqual(["plan", "implement", "review"]);
-    expect(t.runs[2]!.family).not.toBe(t.runs[1]!.family);
-    expect(t.pending?.kind).toBe("complete");
-    const impl = t.runs[1]!;
-    const { diff } = await s.get<{ diff: string }>(`/api/runs/${impl.id}/diff`);
-    expect(diff).toContain(impl.changedFiles[0]);
-
-    await s.post(`/api/threads/${t.id}/decisions/${t.pending!.id}`, { approve: true });
-    t = await s.thread(t.id);
-    expect(t.status).toBe("done");
-    const list = await s.get<{ id: string; status: string }[]>("/api/threads");
-    expect(list.find((x) => x.id === t.id)?.status).toBe("done");
-  });
-
-  it("rejects a relay thread without acceptance criteria", async () => {
-    const s = await testServer();
-    const res = await s.request("POST", "/api/threads", { title: "没有验收标准", task: "x", acceptance: [] });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain("验收标准");
-  });
-});
-
 describe("HTTP API: local-only access", () => {
   it("refuses requests whose Host is not local", async () => {
     const s = await testServer();
@@ -49,11 +17,11 @@ describe("HTTP API: local-only access", () => {
   it("requires the X-Baton header on every write", async () => {
     const s = await testServer();
     const writes: [string, string, unknown][] = [
-      ["POST", "/api/threads", { title: "t", task: "t", acceptance: ["a"] }],
+      ["POST", "/api/threads", { task: "t", source: "demo", model: "demo-chat" }],
       ["PUT", "/api/context", { content: "# x" }],
       ["POST", "/api/memory", { text: "一条不该写进去的记忆" }],
       ["POST", "/api/auth/deepseek", { key: "sk-abcdefghijklmnopqrstuvwxyz" }],
-      ["DELETE", "/api/agents/demo-coder", undefined],
+      ["PUT", "/api/settings", { name: "被改了" }],
     ];
     for (const [method, url, body] of writes) {
       const res = await s.request(method, url, body, { "x-baton": "" });
@@ -61,7 +29,7 @@ describe("HTTP API: local-only access", () => {
     }
     expect(await s.get("/api/threads")).toEqual([]);
     expect(await s.get("/api/memory")).toEqual([]);
-    expect((await s.get("/api/agents")).some((a: { id: string }) => a.id === "demo-coder")).toBe(true);
+    expect((await s.get("/api/settings")).name).not.toBe("被改了");
   });
 
   it("only upgrades local WebSocket connections on /ws", () => {
@@ -84,8 +52,9 @@ describe("HTTP API: credentials", () => {
     await s.post("/api/auth/deepseek", { key });
     const state = await s.get("/api/state");
     expect(state.auth.deepseek.configured).toBe(true);
-    expect(state.agents.find((a: { id: string }) => a.id === "coder-deepseek").available).toBe(true);
-    for (const url of ["/api/settings", "/api/agents", "/api/threads", "/api/memory", "/api/context"]) await s.get(url);
+    const deepseek = (await s.get<{ routes: { source: string; unavailable?: string }[] }>("/api/models")).routes.find((r) => r.source === "deepseek")!;
+    expect(deepseek.unavailable).toBeUndefined();
+    for (const url of ["/api/settings", "/api/threads", "/api/memory", "/api/context"]) await s.get(url);
     expect(s.responses.some((r) => r.includes(key))).toBe(false);
 
     const file = path.join(s.home, "credentials.json");
@@ -102,6 +71,7 @@ describe("HTTP API: credentials", () => {
     expect(process.env.OPENAI_API_KEY).toBeUndefined();
     const state = await s.get("/api/state");
     expect(state.auth.chatgpt.loggedIn).toBe(false);
-    expect(state.agents.find((a: { id: string }) => a.id === "planner-gpt").available).toBe(false);
+    const chatgpt = (await s.get<{ routes: { source: string; unavailable?: string }[] }>("/api/models")).routes.find((r) => r.source === "chatgpt")!;
+    expect(chatgpt.unavailable).toContain("ChatGPT");
   });
 });

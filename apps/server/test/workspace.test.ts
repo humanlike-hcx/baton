@@ -6,21 +6,11 @@ import { createApp } from "../src/app.ts";
 import { AppState } from "../src/state.ts";
 import { HOST, tempDir, testServer } from "./helpers.ts";
 
-const implementNow = (st: { confirm: { planToImplement: boolean } }) => (st.confirm.planToImplement = false);
-
-/** Runs a relay thread to its completion card and accepts it. */
-async function finish(s: Awaited<ReturnType<typeof testServer>>, id: string): Promise<Thread> {
-  let t = await s.settled(id);
-  while (t.pending) {
-    await s.post(`/api/threads/${id}/decisions/${t.pending.id}`, { approve: true });
-    t = await s.settled(id);
-  }
-  return t;
-}
+const BRIEFING = "/api/briefing?source=demo&model=demo-chat&role=chat";
 
 describe("HTTP API: room context (US-40)", () => {
-  it("edits CONTEXT.md within its size cap, and agents see and maintain it", async () => {
-    const s = await testServer({ settings: implementNow });
+  it("edits CONTEXT.md within its size cap, and models see and maintain it", async () => {
+    const s = await testServer();
     await s.put("/api/context", { content: "# 房间上下文\n\n- 文档一律写中文\n" });
     expect((await s.get<{ content: string }>("/api/context")).content).toContain("文档一律写中文");
     expect(fs.readFileSync(path.join(s.root, ".baton/CONTEXT.md"), "utf8")).toContain("文档一律写中文");
@@ -30,11 +20,10 @@ describe("HTTP API: room context (US-40)", () => {
     expect(tooBig.body.error).toContain("8KB");
     expect((await s.get<{ content: string }>("/api/context")).content).toContain("文档一律写中文");
 
-    const briefing = await s.get<Briefing>("/api/agents/demo-coder/briefing?role=implement");
+    const briefing = await s.get<Briefing>(BRIEFING);
     expect(briefing.sections.find((x) => x.key === "context")?.content).toContain("文档一律写中文");
 
-    const created = await s.post("/api/threads", { title: "定约定", task: "整理约定。写进上下文：产出都放在 notes/ 下", acceptance: ["有约定"] });
-    const t = await s.settled(created.id);
+    const t = await s.settled((await s.chat("写进上下文：产出都放在 notes/ 下")).id);
     expect(t.items.find((i) => i.kind === "tool" && i.tool === "update_context")).toMatchObject({ status: "ok" });
     expect((await s.get<{ content: string }>("/api/context")).content).toContain("产出都放在 notes/ 下");
   });
@@ -50,14 +39,14 @@ describe("HTTP API: shared memory (US-47)", () => {
     expect(dup.status).toBe(400);
 
     await s.request("PATCH", `/api/memory/${a.id}`, { pinned: true });
-    let briefing = await s.get<Briefing>("/api/agents/demo-coder/briefing?role=implement");
+    let briefing = await s.get<Briefing>(BRIEFING);
     expect(briefing.text).toContain("发布前要跑 pnpm test");
 
     const b = await s.post<MemoryEntry>("/api/memory", { text: "发布前只要求 CI 通过", kind: "decision", supersedes: a.id });
     let list = await s.get<MemoryEntry[]>("/api/memory");
     expect(list.find((m) => m.id === a.id)).toMatchObject({ status: "superseded", supersededBy: b.id });
     expect(list.find((m) => m.id === b.id)).toMatchObject({ status: "active" });
-    briefing = await s.get<Briefing>("/api/agents/demo-coder/briefing?role=implement");
+    briefing = await s.get<Briefing>(BRIEFING);
     expect(briefing.text).not.toContain("发布前要跑 pnpm test");
 
     await s.request("PATCH", `/api/memory/${b.id}`, { status: "superseded" });
@@ -69,14 +58,13 @@ describe("HTTP API: shared memory (US-47)", () => {
 });
 
 describe("HTTP API: memory switched off (US-48)", () => {
-  it("writes no memory in a workspace that turned it off, from the user or from agents", async () => {
-    const s = await testServer({ settings: (st) => ((st.confirm.planToImplement = false), (st.memory.enabled = false)) });
+  it("writes no memory in a workspace that turned it off, from the user or from models", async () => {
+    const s = await testServer({ settings: (st) => (st.memory.enabled = false) });
     const res = await s.request("POST", "/api/memory", { text: "不该写进去" });
     expect(res.status).toBe(400);
     expect(res.body.error).toContain("关闭记忆");
 
-    const created = await s.post("/api/threads", { title: "不记", task: "写一份说明", acceptance: ["有说明"] });
-    const t = await s.settled(created.id);
+    const t = await s.settled((await s.chat("记住：不该写进去")).id);
     expect(t.items.find((i) => i.kind === "tool" && i.tool === "remember")).toMatchObject({ status: "error" });
     expect(await s.get("/api/memory")).toEqual([]);
     expect(fs.readdirSync(path.join(s.root, ".baton/memory"))).toEqual([]);
@@ -113,6 +101,22 @@ describe("HTTP API: the demo workspace on first start (US-83)", () => {
     const again = await start();
     expect(again.workspace).toMatchObject({ root: first.workspace.root, demo: true });
   });
+
+  it("offers the demo models only in the demo workspace, and a demo chat goes from change to review offline", async () => {
+    const s = await testServer();
+    const demoRoute = async () => (await s.get<{ routes: { source: string; models: { id: string }[] }[] }>("/api/models")).routes.find((r) => r.source === "demo");
+    expect((await demoRoute())?.models.map((m) => m.id)).toEqual(["demo-chat", "demo-review"]);
+    const t = await s.settled((await s.chat("写文件：notes/demo.md", { access: "allow" })).id);
+    await s.post(`/api/threads/${t.id}/review`, { source: "demo", model: "demo-review" });
+    const reviewed = await s.waitForThread(t.id, (x) => x.runs.length === 2 && x.status !== "running", "review");
+    expect(reviewed.runs[1]!.review?.verdict).toBe("pass");
+
+    await s.post("/api/workspace/open", { path: tempDir("baton-ws-real-") });
+    expect((await s.get("/api/state")).workspace.demo).toBe(false);
+    expect(await demoRoute()).toBeUndefined();
+    const refused = await s.request("POST", "/api/threads", { task: "hi", source: "demo", model: "demo-chat" });
+    expect(refused.status).toBe(400);
+  });
 });
 
 describe("HTTP API: workspaces (US-75)", () => {
@@ -129,7 +133,7 @@ describe("HTTP API: workspaces (US-75)", () => {
     let state = await s.get("/api/state");
     expect(state.workspace.root).toBe(fs.realpathSync(second));
     expect(state.recent).toEqual([fs.realpathSync(second), first]);
-    expect(fs.existsSync(path.join(second, ".baton/agents"))).toBe(true);
+    expect(fs.existsSync(path.join(second, ".baton/rules/role-chat.md"))).toBe(true);
     expect(await s.get("/api/threads")).toEqual([]);
 
     await s.post("/api/workspace/open", { path: first });
@@ -142,7 +146,7 @@ describe("HTTP API: workspaces (US-75)", () => {
   it("refuses to switch while a run is in progress", async () => {
     const s = await testServer({ autoApprove: false });
     const other = tempDir("baton-ws3-");
-    const a = await s.post("/api/threads", { title: "占着", task: "写一份说明", acceptance: ["有说明"], stage: "implement" });
+    const a = await s.chat("写文件：notes/busy.md", { access: "ask" });
     await s.waitForThread(a.id, (t) => t.items.some((i) => i.kind === "approval" && i.status === "pending"), "command approval");
 
     const busy = await s.request("POST", "/api/workspace/open", { path: other });
@@ -154,30 +158,6 @@ describe("HTTP API: workspaces (US-75)", () => {
     await s.settled(a.id);
     await s.post("/api/workspace/open", { path: other });
     expect((await s.get("/api/state")).workspace.root).toBe(fs.realpathSync(other));
-  });
-});
-
-describe("HTTP API: no demo agents in real workspaces (US-90)", () => {
-  it("seeds only real agents, and drops demo cards left by earlier versions", async () => {
-    const s = await testServer();
-    expect((await s.get<{ source: string }[]>("/api/agents")).some((a) => a.source === "demo")).toBe(true);
-
-    const fresh = tempDir("baton-ws-real-");
-    await s.post("/api/workspace/open", { path: fresh });
-    const agents = await s.get<{ id: string; source: string }[]>("/api/agents");
-    expect(agents.length).toBeGreaterThan(0);
-    expect(agents.some((a) => a.source === "demo")).toBe(false);
-
-    const old = tempDir("baton-ws-old-");
-    fs.mkdirSync(path.join(old, ".baton/agents"), { recursive: true });
-    fs.writeFileSync(path.join(old, ".baton/workspace.json"), "{}");
-    const card = (id: string, source: string, provider: string, model: string) =>
-      `---\nname: ${id}\nsource: ${source}\nruntime: pi\nprovider: ${provider}\nmodel: ${model}\nroles: [plan]\nenabled: false\n---\n`;
-    fs.writeFileSync(path.join(old, ".baton/agents/demo-planner.md"), card("demo-planner", "demo", "demo", "demo-plan"));
-    fs.writeFileSync(path.join(old, ".baton/agents/my-planner.md"), card("my-planner", "deepseek", "deepseek", "deepseek-v4-pro"));
-    await s.post("/api/workspace/open", { path: old });
-    expect((await s.get<{ id: string }[]>("/api/agents")).map((a) => a.id)).toEqual(["my-planner"]);
-    expect(fs.existsSync(path.join(old, ".baton/agents/demo-planner.md"))).toBe(false);
   });
 });
 
@@ -196,7 +176,8 @@ describe("HTTP API: signing out (US-9)", () => {
     state = await s.get("/api/state");
     expect(state.auth.chatgpt.loggedIn).toBe(false);
     expect(state.auth.deepseek.configured).toBe(false);
-    expect(state.agents.find((a: { id: string }) => a.id === "planner-gpt").available).toBe(false);
+    const routes = (await s.get<{ routes: { source: string; unavailable?: string }[] }>("/api/models")).routes;
+    expect(routes.find((r) => r.source === "chatgpt")?.unavailable).toContain("ChatGPT");
     expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({});
   });
 });
@@ -204,25 +185,20 @@ describe("HTTP API: signing out (US-9)", () => {
 describe("HTTP API: ChatGPT through the Codex login (US-88)", () => {
   const oauth = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000, accountId: "acct" };
 
-  it("runs GPT agents on the Codex login and lists only the models it offers", async () => {
+  it("runs GPT models on the Codex login and lists only the models it offers", async () => {
     const s = await testServer();
     const file = path.join(s.home, "credentials.json");
     fs.writeFileSync(file, JSON.stringify({ "openai-codex": oauth }), { mode: 0o600 });
     const state = await s.get("/api/state");
     expect(state.auth.chatgpt).toMatchObject({ loggedIn: true, method: "codex" });
 
-    const models = (await s.get<{ chatgpt: { id: string }[] }>("/api/models")).chatgpt.map((m) => m.id);
+    const route = (await s.get<{ routes: { source: string; unavailable?: string; models: { id: string; family: string }[] }[] }>("/api/models")).routes.find((r) => r.source === "chatgpt")!;
+    expect(route.unavailable).toBeUndefined();
+    const models = route.models.map((m) => m.id);
     expect(models).toContain("gpt-6.1-sol");
     expect(models).not.toContain("gpt-5.5");
-
-    // A model the Codex login lacks fails before any request, with a fix the user can make.
-    const agent = { name: "旧 GPT", runtime: "pi", source: "chatgpt", provider: "openai", model: "gpt-5.5", roles: ["chat"], permissions: { write: "deny", exec: "deny", network: "deny" }, costTier: 3, enabled: true, body: "" };
-    await s.put("/api/agents/old-gpt", agent);
-    expect((await s.get("/api/state")).agents.find((a: { id: string }) => a.id === "old-gpt").available).toBe(true);
-    const created = await s.post<Thread>("/api/threads", { kind: "chat", task: "在吗", agentId: "old-gpt" });
-    const t = await s.waitForThread(created.id, (x) => x.runs.length > 0 && x.runs[0]!.status !== "running", "failed run");
-    expect(t.runs[0]).toMatchObject({ status: "failed" });
-    expect(t.runs[0]!.error).toContain("用 Codex 账号登录时没有 gpt-5.5");
+    expect(route.models.every((m) => m.family === "gpt")).toBe(true);
+    expect((await s.request("POST", "/api/threads", { task: "在吗", source: "chatgpt", model: "gpt-5.5" })).body.error).toContain("没有模型 gpt-5.5");
 
     fs.writeFileSync(file, JSON.stringify({ openai: oauth, "openai-codex": oauth }), { mode: 0o600 });
     expect((await s.get("/api/state")).auth.chatgpt.method).toBe("chatgpt");
@@ -256,21 +232,23 @@ describe("HTTP API: ChatGPT through the Codex login (US-88)", () => {
 });
 
 describe("HTTP API: stats (US-76)", () => {
-  it("counts runs, first-pass and send-backs, decisions and tokens per runtime and model", async () => {
-    const s = await testServer();
-    await finish(s, (await s.post("/api/threads", { title: "一次通过", task: "写一份说明", acceptance: ["有说明"] })).id);
-    await finish(s, (await s.post("/api/threads", { title: "会被退回", task: "写一份说明，检查时退回一次", acceptance: ["有说明"] })).id);
+  it("counts replies, changes, reviews given and how each model's changes fared, with tokens, per runtime and model", async () => {
+    const s = await testServer({ settings: (st) => (st.checks = [{ name: "没有 TODO", command: "! grep -rq TODO notes", timeoutSec: 30 }]) });
+    const review = async (id: string) => {
+      const before = (await s.thread(id)).runs.length;
+      await s.post(`/api/threads/${id}/review`, { source: "demo", model: "demo-review" });
+      await s.waitForThread(id, (t) => t.runs.length > before && t.status !== "running", "review");
+    };
+    const good = await s.settled((await s.chat("写文件：notes/good.md", { access: "allow" })).id);
+    await review(good.id);
+    const bad = await s.settled((await s.chat("写文件：notes/bad.md TODO", { access: "allow" })).id);
+    await review(bad.id);
+    await s.say(bad.id, "只是聊聊");
 
     const rows = await s.get<StatRow[]>("/api/stats");
-    const coder = rows.find((r) => r.agentIds.includes("demo-coder"))!;
-    expect(coder.stages.implement).toMatchObject({ runs: 3, succeeded: 3, firstPass: 1, sentBack: 1 });
-    expect(coder.tokens).toBeGreaterThan(0);
-    expect(coder.costUsd).toBe(0);
-    const planner = rows.find((r) => r.agentIds.includes("demo-planner"))!;
-    expect(planner.stages.plan?.runs).toBe(2);
-    expect(planner.accepted).toBe(0);
-    expect(coder.accepted).toBe(2);
-    const reviewer = rows.find((r) => r.agentIds.includes("demo-reviewer"))!;
-    expect(reviewer.stages.review).toMatchObject({ runs: 3, succeeded: 3 });
+    const chat = rows.find((r) => r.key === "pi:demo-chat")!;
+    expect(chat).toMatchObject({ source: "demo", runs: 3, succeeded: 3, changes: 2, reviewsGiven: 0, reviewedPass: 1, reviewedFail: 1, costUsd: 0 });
+    expect(chat.tokens).toBeGreaterThan(0);
+    expect(rows.find((r) => r.key === "pi:demo-review")).toMatchObject({ runs: 2, reviewsGiven: 2, changes: 0 });
   });
 });

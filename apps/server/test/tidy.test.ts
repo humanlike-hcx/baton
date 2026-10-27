@@ -84,10 +84,10 @@ describe("HTTP API: tidying the room context (US-42)", () => {
     expect((await s.get<{ content: string }>("/api/context")).content).toContain("新加的一条约定");
   });
 
-  it("tidies after an agent's update_context goes over budget", async () => {
-    const s = await testServer({ settings: (st) => (smallBudget(st), (st.confirm.planToImplement = false)) });
+  it("tidies after a model's update_context goes over budget", async () => {
+    const s = await testServer({ settings: smallBudget });
     const convention = "所有对外文档都要先给法务过目，".repeat(24);
-    const t = await s.post("/api/threads", { title: "长约定", task: `写进上下文：${convention}`, acceptance: ["有说明"], stage: "plan" });
+    const t = await s.chat(`写进上下文：${convention}`);
     await s.settled(t.id);
 
     const record = (await tidied(s)).records[0]!;

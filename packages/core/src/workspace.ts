@@ -5,13 +5,15 @@ import {
   AGENTS_MD_END,
   AGENTS_MD_SECTION,
   CONTEXT_TEMPLATE,
+  RETIRED_RULE_FILES,
   RULE_FILES,
-  defaultAgents,
   defaultSettings,
 } from "./defaults.ts";
-import { normalizePermissions } from "./permissions.ts";
-import type { AgentCard, Thread, WorkspaceSettings } from "./types.ts";
-import { nowIso, parseFrontmatter, readJson, readText, stringifyFrontmatter, writeFileAtomic } from "./util.ts";
+import type { Thread, WorkspaceSettings } from "./types.ts";
+import { nowIso, readJson, readText, writeFileAtomic } from "./util.ts";
+
+/** Phrases only the relay-era default rules contained; a rule file still saying them was never edited for chat-first. */
+const RELAY_ERA_RULE = /按阶段接力|write_handoff|也不参与接力/;
 
 export class Workspace {
   readonly root: string;
@@ -38,20 +40,18 @@ export class Workspace {
   }
 
   private init(demo: boolean): void {
-    for (const sub of ["rules", "agents", "memory", "lessons", "handoffs", "threads", "sessions"]) {
+    for (const sub of ["rules", "memory", "lessons", "threads", "sessions"]) {
       fs.mkdirSync(this.path(sub), { recursive: true });
     }
     if (!fs.existsSync(this.path("workspace.json"))) {
       const settings = defaultSettings(path.basename(this.root));
       if (demo) settings.checks = [{ name: "笔记已生成", command: "ls notes", timeoutSec: 30 }];
       this.saveSettings(settings);
-      for (const agent of defaultAgents(demo)) this.saveAgent(agent);
     }
-    // Earlier versions seeded every workspace with disabled demo agents; real workspaces drop them.
-    if (!demo) for (const agent of this.listAgents()) if (agent.source === "demo") this.deleteAgent(agent.id);
+    for (const name of RETIRED_RULE_FILES) fs.rmSync(this.path("rules", name), { force: true });
     for (const [name, content] of Object.entries(RULE_FILES)) {
       const file = this.path("rules", name);
-      if (!fs.existsSync(file)) writeFileAtomic(file, content);
+      if (!fs.existsSync(file) || RELAY_ERA_RULE.test(readText(file))) writeFileAtomic(file, content);
     }
     if (!fs.existsSync(this.path("CONTEXT.md"))) writeFileAtomic(this.path("CONTEXT.md"), CONTEXT_TEMPLATE);
     const ignore = this.path(".gitignore");
@@ -81,68 +81,28 @@ export class Workspace {
     writeFileAtomic(file, `${JSON.stringify(config, null, 2)}\n`);
   }
 
+  /** Only the current fields: files written before chat-first also carry relay limits and confirmations. */
   settings(): WorkspaceSettings {
     const base = defaultSettings(path.basename(this.root));
     const saved = readJson<Partial<WorkspaceSettings>>(this.path("workspace.json"), {});
     return {
-      ...base,
-      ...saved,
-      limits: { ...base.limits, ...saved.limits },
-      confirm: { ...base.confirm, ...saved.confirm },
-      advisor: { ...base.advisor, ...saved.advisor },
-      permissions: { ...base.permissions, ...saved.permissions },
-      memory: { ...base.memory, ...saved.memory },
-      budgets: { ...base.budgets, ...saved.budgets },
-      cursor: { ...base.cursor, ...saved.cursor },
       version: 1,
+      name: saved.name ?? base.name,
+      checks: saved.checks ?? base.checks,
+      permissions: {
+        shellAllow: saved.permissions?.shellAllow ?? base.permissions.shellAllow,
+        shellDeny: saved.permissions?.shellDeny ?? base.permissions.shellDeny,
+        denyPaths: saved.permissions?.denyPaths ?? base.permissions.denyPaths,
+      },
+      memory: { ...base.memory, ...saved.memory },
+      budgets: { briefing: saved.budgets?.briefing ?? base.budgets.briefing, context: saved.budgets?.context ?? base.budgets.context },
+      approvalTimeoutSec: saved.approvalTimeoutSec ?? base.approvalTimeoutSec,
+      cursor: { ...base.cursor, ...saved.cursor },
     };
   }
 
   saveSettings(settings: WorkspaceSettings): void {
     writeFileAtomic(this.path("workspace.json"), `${JSON.stringify(settings, null, 2)}\n`);
-  }
-
-  listAgents(): AgentCard[] {
-    const dir = this.path("agents");
-    return fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith(".md"))
-      .sort()
-      .map((f) => this.readAgentFile(path.join(dir, f)))
-      .filter((a): a is AgentCard => a !== undefined);
-  }
-
-  getAgent(id: string): AgentCard | undefined {
-    return this.readAgentFile(this.path("agents", `${id}.md`));
-  }
-
-  private readAgentFile(file: string): AgentCard | undefined {
-    if (!fs.existsSync(file)) return undefined;
-    const { data, body } = parseFrontmatter<AgentCard>(readText(file));
-    const id = path.basename(file, ".md");
-    return {
-      id,
-      name: data.name ?? id,
-      runtime: data.runtime ?? "pi",
-      source: data.source ?? "demo",
-      provider: data.provider ?? "demo",
-      model: data.model ?? "",
-      roles: data.roles ?? [],
-      permissions: normalizePermissions(data.permissions),
-      costTier: data.costTier ?? 2,
-      enabled: data.enabled ?? true,
-      body,
-    };
-  }
-
-  saveAgent(agent: AgentCard): void {
-    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(agent.id)) throw new Error(`agent id 只能包含小写字母、数字和连字符：${agent.id}`);
-    const { body, id: _id, ...data } = agent;
-    writeFileAtomic(this.path("agents", `${agent.id}.md`), stringifyFrontmatter(data, body));
-  }
-
-  deleteAgent(id: string): void {
-    fs.rmSync(this.path("agents", `${id}.md`), { force: true });
   }
 
   listRules(): { name: string; content: string }[] {

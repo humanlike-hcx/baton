@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { CompactionProgress, Handoff, Lesson, MemoryEntry, MemoryKind } from "./types.ts";
+import type { Lesson, MemoryEntry, MemoryKind } from "./types.ts";
 import { newId, nowIso, parseFrontmatter, readText, searchTerms, similarity, stringifyFrontmatter, writeFileAtomic } from "./util.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -158,71 +158,4 @@ export function updateLesson(ws: Workspace, id: string, patch: Partial<Pick<Less
   const next = { ...lesson, ...patch, updatedAt: nowIso() };
   saveLesson(ws, next);
   return next;
-}
-
-export function handoffMarkdown(h: Handoff): string {
-  const lines = [
-    `# 交接 · ${h.stage} · ${h.agentId}${h.auto ? "（自动生成）" : ""}`,
-    "",
-    h.verdict ? `**结论**：${h.verdict === "pass" ? "通过" : "不通过"}\n` : "",
-    `## 做了什么\n${h.done || "（无）"}`,
-    "",
-    `## 改了哪些文件\n${h.files.length ? h.files.map((f) => `- ${f}`).join("\n") : "（无）"}`,
-    "",
-    h.issues?.length ? `## 问题\n${h.issues.map((i) => `- ${i}`).join("\n")}\n` : "",
-    `## 还剩什么\n${h.remaining || "（无）"}`,
-    "",
-    `## 建议下一步\n${h.next || "（无）"}`,
-  ];
-  return lines.filter((l) => l !== "").join("\n");
-}
-
-const PROGRESS_SECTIONS: [RegExp, keyof Omit<CompactionProgress, "compactions">][] = [
-  [/^(done|progress so far)\b/i, "done"],
-  [/^(in progress|blocked)\b/i, "remaining"],
-  [/^next steps\b/i, "next"],
-];
-
-/** Reads the progress sections of a Pi compaction summary (the full format and the split-turn one). */
-export function compactionProgress(summary: string, previous?: CompactionProgress): CompactionProgress {
-  const out: CompactionProgress = { compactions: (previous?.compactions ?? 0) + 1, done: [], remaining: [], next: [] };
-  let section: keyof Omit<CompactionProgress, "compactions"> | undefined;
-  for (const line of summary.split("\n")) {
-    const heading = /^#{1,4}\s+(.+)$/.exec(line.trim());
-    if (heading) {
-      section = PROGRESS_SECTIONS.find(([re]) => re.test(heading[1]!))?.[1];
-      continue;
-    }
-    if (/^<\/?[a-z-]+>$/.test(line.trim()) || line.trim() === "---") section = undefined;
-    const item = /^\s*(?:[-*]|\d+\.)\s+(?:\[[ xX]\]\s*)?(.+)$/.exec(line)?.[1]?.trim();
-    if (!section || !item || /^[(（](none|无)[)）]$/i.test(item)) continue;
-    if (!out[section].includes(item)) out[section].push(item);
-  }
-  return out;
-}
-
-const normalized = (s: string) => s.replace(/[\s`*_。，,.；;：:]/g, "").toLowerCase();
-
-/**
- * Fills a handoff with what the compaction summary recorded and the handoff left out, so progress
- * made before the context was compacted still reaches the next agent.
- */
-export function mergeProgress<T extends Pick<Handoff, "done" | "remaining" | "next">>(h: T, p: CompactionProgress | undefined): T {
-  if (!p) return h;
-  const have = normalized(h.done);
-  const missing = p.done.filter((item) => !have.includes(normalized(item)));
-  const list = (items: string[]) => items.map((i) => `- ${i}`).join("\n");
-  return {
-    ...h,
-    done: missing.length ? [h.done.trim(), `压缩前的进展（来自压缩摘要）：\n${list(missing)}`].filter(Boolean).join("\n\n") : h.done,
-    remaining: h.remaining.trim() ? h.remaining : list(p.remaining),
-    next: h.next.trim() ? h.next : list(p.next),
-  };
-}
-
-export function saveHandoff(ws: Workspace, h: Handoff): string {
-  const rel = `handoffs/${h.threadId}/${h.runId}.md`;
-  const { done: _d, ...meta } = h;
-  writeFileAtomic(ws.path(rel), stringifyFrontmatter({ ...meta, files: h.files }, handoffMarkdown(h)));
-  return `.baton/${rel}`;
 }
