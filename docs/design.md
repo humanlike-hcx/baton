@@ -136,6 +136,7 @@ agent 只提议目标阶段，harness 决定交给谁。
 **对话线程**（`Thread.kind = "chat"`）：不走接力，阶段固定为 `chat`，角色为 `chat`。
 
 - 用户选 agent，存在 `pinnedAgents.chat`；不按角色挑选，任何启用的 agent 都能聊。每条消息触发一次运行，运行结束回到「空闲」。
+- 选择框同时列出已有 agent 和 `/api/models` 里三条线路已登录的全部模型，可搜索。选中的模型已有启用的同线路同模型卡片时直接用它；否则调 `POST /api/agents/chat {source, model}`：服务端用该线路的实时模型列表校验，建（或重新启用）一张 `chat-<线路>-<模型 slug>` 卡片，`roles: ["chat"]`，三项权限都是 `ask`。接力按角色挑选，所以这些卡片不会进入接力。
 - 回复进行中发的消息排队，这一轮结束后接着回复；取消后不自动续上。
 - 换 agent 时写一条时间线提示。新 agent 的开场上下文里带「更早的对话（摘要）」和「最近几轮原文」：最近 3 轮原文，更早的每轮压成一行，存在 `thread.summary`，最多 30 行。
 - 默认只读。用户开放写权限后（`approvedLevel ≥ 2`），有效权限取 agent 卡片和线程开关的较小者：开关打开且 agent 卡片本身可写时，写文件、命令按 agent 卡片；否则不能写、不能执行命令。可写的对话运行和实现一样占写锁、先快照。服务重启时收回所有对话的写权限。
@@ -188,7 +189,7 @@ apps/desktop    Electron 外壳：在主进程里启动同一个服务，窗口�
 
 - **Pi 执行器**：`@earendil-works/pi-coding-agent` SDK 的 `createAgentSession`，自定义模型运行时与工具，会话 JSONL 存到 `.baton/sessions/`。
 - **ACP 执行器**：启动 `agent --model <id> acp`，按 ACP 流程 `initialize → session/new → session/prompt`，把 `session/update` 转成运行事件，把 `session/request_permission` 转给审批。
-- **演示执行器**：pi-ai 的假模型，不需要任何账号即可跑通整条流程，用于开发与测试。
+- **演示执行器**：pi-ai 的假模型，不需要任何账号即可跑通整条流程，用于开发与测试。只有演示工作区会生成演示 agent；打开真实工作区时删除 `source: demo` 的卡片（早先版本给每个工作区都写过停用的演示卡片）。
 
 服务只监听 `127.0.0.1`。
 

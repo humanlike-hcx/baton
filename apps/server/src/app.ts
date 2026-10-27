@@ -196,6 +196,12 @@ export function createApp(state: AppState): Hono {
   // ---------- agents ----------
 
   app.get("/api/agents", (c) => c.json(state.ws.listAgents()));
+  app.post("/api/agents/chat", async (c) => {
+    const { source, model } = await body<{ source?: string; model?: string }>(c);
+    const agent = await state.chatAgent(source ?? "", model ?? "").catch((e: Error) => bad(e.message));
+    state.broadcast({ type: "state" });
+    return c.json(agent);
+  });
   app.put("/api/agents/:id", async (c) => {
     const card = await body<AgentCard>(c);
     const agent: AgentCard = { ...card, id: c.req.param("id"), permissions: normalizePermissions(card.permissions) };

@@ -12,11 +12,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { del, post } from "@/lib/api";
-import { ROLE_LABEL, SOURCE_LABEL, STAGES, STAGE_LABEL, STATUS_TONE, kb, statusLabel, tokens } from "@/lib/format";
+import { ROLE_LABEL, STAGES, STAGE_LABEL, STATUS_TONE, kb, statusLabel, tokens } from "@/lib/format";
 import { href, navigate } from "@/lib/router";
 import { useThread, useBaton } from "@/lib/store";
 import type { AgentView, Stage, Thread } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { ChatAgentPicker } from "./chat-agent-picker";
 import { DiffDialog } from "./diff-dialog";
 import { TimelineView } from "./timeline";
 
@@ -159,21 +160,7 @@ function ChatControls({ thread, agents, agentId, onAgent }: { thread: Thread; ag
   };
   return (
     <div className="mx-auto mb-2 flex max-w-4xl flex-wrap items-center gap-x-4 gap-y-2">
-      <Select value={agentId} onValueChange={onAgent}>
-        <SelectTrigger size="sm" className="min-w-56" aria-label="回复的 agent">
-          <SelectValue placeholder="选择 agent" />
-        </SelectTrigger>
-        <SelectContent>
-          {agents
-            .filter((a) => a.enabled)
-            .map((a) => (
-              <SelectItem key={a.id} value={a.id} disabled={!a.available}>
-                {a.name} · {SOURCE_LABEL[a.source]}
-                {!a.available ? "（未登录）" : ""}
-              </SelectItem>
-            ))}
-        </SelectContent>
-      </Select>
+      <ChatAgentPicker agents={agents} value={agentId} onChange={onAgent} className="min-w-56 max-w-80" />
       {agentId && agentId !== thread.pinnedAgents.chat && <span className="text-xs text-muted-foreground">下一条消息由它接着回复</span>}
       <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground" title="只对这个线程有效；每次回复前自动快照，服务重启后收回">
         <Switch size="sm" checked={open} disabled={busy || replying} onCheckedChange={(on) => void toggle(on)} />

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Thread, TimelineItem } from "@baton/core";
+import { selectAgent, type AgentCard, type Thread, type TimelineItem } from "@baton/core";
 import { describe, expect, it } from "vitest";
 import { testServer } from "./helpers.ts";
 
@@ -218,5 +218,37 @@ describe("chat threads: live replies, tool calls and approvals (US-21)", () => {
     const deltas = s.events.filter((e) => e.type === "delta" && e.threadId === created.id);
     expect(deltas.length).toBeGreaterThan(0);
     expect(replies(t).join("")).toContain("写文件的结果见上面的工具调用");
+  });
+});
+
+describe("chat threads: chat with any model a route offers (US-89)", () => {
+  it("creates a chat-only card for a model on first pick, reuses it, and keeps it out of the relay", async () => {
+    const s = await testServer();
+    const card = await s.post<AgentCard>("/api/agents/chat", { source: "cursor", model: "gemini-4-argon-medium" });
+    expect(card).toMatchObject({ id: "chat-cursor-gemini-4-argon-medium", runtime: "cursor", provider: "cursor", roles: ["chat"], enabled: true });
+    expect(card.name).toContain("对话 ·");
+    expect(card.permissions.write).not.toBe("deny");
+    expect(fs.existsSync(path.join(s.root, ".baton/agents/chat-cursor-gemini-4-argon-medium.md"))).toBe(true);
+
+    await s.put(`/api/agents/${card.id}`, { ...card, enabled: false });
+    const again = await s.post<AgentCard>("/api/agents/chat", { source: "cursor", model: "gemini-4-argon-medium" });
+    expect(again).toMatchObject({ id: card.id, enabled: true });
+    expect((await s.get<AgentCard[]>("/api/agents")).filter((a) => a.model === "gemini-4-argon-medium")).toHaveLength(1);
+
+    const created = await s.post<Thread>("/api/threads", { kind: "chat", task: "看看 notes 目录", agentId: card.id });
+    const t = await s.settled(created.id);
+    expect(t.runs[0]).toMatchObject({ agentId: card.id, runtime: "cursor", model: "gemini-4-argon-medium", status: "succeeded", changedFiles: [] });
+
+    const input = { thread: t, agents: [again], settings: await s.get("/api/settings"), available: () => true };
+    for (const stage of ["plan", "implement", "review"] as const) expect(selectAgent(stage, input).chosen).toBeUndefined();
+  });
+
+  it("only offers models the route lists, and never GPT through Cursor", async () => {
+    const s = await testServer();
+    const wrong = await s.request("POST", "/api/agents/chat", { source: "cursor", model: "gpt-5.6-sol" });
+    expect(wrong.status).toBe(400);
+    expect(wrong.body.error).toContain("没有模型 gpt-5.6-sol");
+    expect((await s.request("POST", "/api/agents/chat", { source: "demo", model: "demo-plan" })).status).toBe(400);
+    expect((await s.request("POST", "/api/agents/chat", { source: "deepseek", model: "no-such-model" })).status).toBe(400);
   });
 });

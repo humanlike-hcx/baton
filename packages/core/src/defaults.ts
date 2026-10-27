@@ -234,5 +234,5 @@ export function defaultAgents(demo: boolean): AgentCard[] {
       body: "演示用的顾问，只读。",
     },
   ];
-  return [...real, ...demoAgents];
+  return demo ? [...real, ...demoAgents] : real;
 }

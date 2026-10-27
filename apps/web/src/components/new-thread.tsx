@@ -12,6 +12,7 @@ import { ROLE_LABEL, SOURCE_LABEL } from "@/lib/format";
 import { navigate } from "@/lib/router";
 import { useBaton } from "@/lib/store";
 import type { Role, Stage, Thread, ThreadKind } from "@/lib/types";
+import { ChatAgentPicker } from "./chat-agent-picker";
 
 const START_STAGES: { value: Stage; label: string; hint: string }[] = [
   { value: "plan", label: "从方案开始", hint: "推荐。先定方案和验收标准，再交给实现。" },
@@ -72,19 +73,7 @@ function NewChat() {
     <div className="mt-6 space-y-5">
       <div className="space-y-1.5">
         <Label>和谁聊</Label>
-        <Select value={chosen ?? ""} onValueChange={setAgentId}>
-          <SelectTrigger className="w-full sm:w-96">
-            <SelectValue placeholder="选择 agent" />
-          </SelectTrigger>
-          <SelectContent>
-            {agents.map((a) => (
-              <SelectItem key={a.id} value={a.id} disabled={!a.available}>
-                {a.name} · {SOURCE_LABEL[a.source]}
-                {!a.available ? "（未登录）" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <ChatAgentPicker agents={agents} value={chosen} onChange={setAgentId} size="default" className="flex w-full sm:w-96" />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="message">第一条消息</Label>

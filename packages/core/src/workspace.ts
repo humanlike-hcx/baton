@@ -47,6 +47,8 @@ export class Workspace {
       this.saveSettings(settings);
       for (const agent of defaultAgents(demo)) this.saveAgent(agent);
     }
+    // Earlier versions seeded every workspace with disabled demo agents; real workspaces drop them.
+    if (!demo) for (const agent of this.listAgents()) if (agent.source === "demo") this.deleteAgent(agent.id);
     for (const [name, content] of Object.entries(RULE_FILES)) {
       const file = this.path("rules", name);
       if (!fs.existsSync(file)) writeFileAtomic(file, content);

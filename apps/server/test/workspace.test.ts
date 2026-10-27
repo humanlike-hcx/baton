@@ -157,6 +157,30 @@ describe("HTTP API: workspaces (US-75)", () => {
   });
 });
 
+describe("HTTP API: no demo agents in real workspaces (US-90)", () => {
+  it("seeds only real agents, and drops demo cards left by earlier versions", async () => {
+    const s = await testServer();
+    expect((await s.get<{ source: string }[]>("/api/agents")).some((a) => a.source === "demo")).toBe(true);
+
+    const fresh = tempDir("baton-ws-real-");
+    await s.post("/api/workspace/open", { path: fresh });
+    const agents = await s.get<{ id: string; source: string }[]>("/api/agents");
+    expect(agents.length).toBeGreaterThan(0);
+    expect(agents.some((a) => a.source === "demo")).toBe(false);
+
+    const old = tempDir("baton-ws-old-");
+    fs.mkdirSync(path.join(old, ".baton/agents"), { recursive: true });
+    fs.writeFileSync(path.join(old, ".baton/workspace.json"), "{}");
+    const card = (id: string, source: string, provider: string, model: string) =>
+      `---\nname: ${id}\nsource: ${source}\nruntime: pi\nprovider: ${provider}\nmodel: ${model}\nroles: [plan]\nenabled: false\n---\n`;
+    fs.writeFileSync(path.join(old, ".baton/agents/demo-planner.md"), card("demo-planner", "demo", "demo", "demo-plan"));
+    fs.writeFileSync(path.join(old, ".baton/agents/my-planner.md"), card("my-planner", "deepseek", "deepseek", "deepseek-v4-pro"));
+    await s.post("/api/workspace/open", { path: old });
+    expect((await s.get<{ id: string }[]>("/api/agents")).map((a) => a.id)).toEqual(["my-planner"]);
+    expect(fs.existsSync(path.join(old, ".baton/agents/demo-planner.md"))).toBe(false);
+  });
+});
+
 describe("HTTP API: signing out (US-9)", () => {
   it("signs out of ChatGPT and removes the DeepSeek key", async () => {
     const s = await testServer();

@@ -15,6 +15,7 @@ import {
   cursorStatus,
   deviceId,
   readJson,
+  validateAgentRoute,
   batonHome,
   chatgptMethod,
   writeFileAtomic,
@@ -57,6 +58,12 @@ interface ChatGptLogin {
   controller: AbortController;
   manual?: (input: string) => void;
 }
+
+const CHAT_ROUTES = {
+  chatgpt: { label: "ChatGPT ", runtime: "pi", provider: "openai", costTier: 3 },
+  deepseek: { label: "DeepSeek ", runtime: "pi", provider: "deepseek", costTier: 1 },
+  cursor: { label: "Cursor ", runtime: "cursor", provider: "cursor", costTier: 2 },
+} as const;
 
 /** Login errors can quote token responses; keep anything token-like out of what reaches the browser. */
 function loginError(error: Error): string {
@@ -335,6 +342,39 @@ export class AppState {
       .getModels(piProvider)
       .filter((m) => provider !== "openai" || /^(gpt-5|gpt-6|o3|o4)/.test(m.id))
       .map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow }));
+  }
+
+  /** The chat card for a model, created on first use so every model a route offers can be chatted with. */
+  async chatAgent(source: string, model: string): Promise<AgentCard> {
+    const route = CHAT_ROUTES[source as keyof typeof CHAT_ROUTES];
+    if (!route) throw new Error("只能选 ChatGPT、DeepSeek 或 Cursor 线路上的模型");
+    const models = source === "cursor" ? (await this.listCursorModels()).models : await this.listPiModels(route.provider as "openai" | "deepseek");
+    const found = models.find((m) => m.id === model);
+    if (!found) throw new Error(`${route.label}线路上没有模型 ${model}`);
+    const prefix = `chat-${source}-`;
+    const id = prefix + model.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64 - prefix.length);
+    const existing = this.ws.getAgent(id);
+    if (existing) {
+      if (!existing.enabled) this.ws.saveAgent({ ...existing, enabled: true });
+      return { ...existing, enabled: true };
+    }
+    const agent: AgentCard = {
+      id,
+      name: `对话 · ${found.name || model}`,
+      runtime: route.runtime,
+      source: source as AgentCard["source"],
+      provider: route.provider,
+      model,
+      roles: ["chat"],
+      permissions: { write: "ask", exec: "ask", network: "ask" },
+      costTier: route.costTier,
+      enabled: true,
+      body: "在对话里选中这个模型时自动创建，只担任对话角色，不参与接力。",
+    };
+    const routeError = validateAgentRoute(agent);
+    if (routeError) throw new Error(routeError);
+    this.ws.saveAgent(agent);
+    return agent;
   }
 
   private tidyModel(): TidyModel | undefined {
