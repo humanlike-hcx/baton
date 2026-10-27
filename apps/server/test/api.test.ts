@@ -51,8 +51,9 @@ describe("HTTP API: credentials", () => {
 
     await s.post("/api/auth/deepseek", { key });
     const state = await s.get("/api/state");
-    expect(state.auth.deepseek.configured).toBe(true);
-    const deepseek = (await s.get<{ routes: { source: string; unavailable?: string }[] }>("/api/models")).routes.find((r) => r.source === "deepseek")!;
+    expect(state.auth.keys).toEqual([expect.objectContaining({ template: "deepseek", label: "DeepSeek", provider: "deepseek", configured: true })]);
+    const deepseek = (await s.get<{ routes: { source: string; provider?: string; unavailable?: string }[] }>("/api/models")).routes.find((r) => r.provider === "deepseek")!;
+    expect(deepseek).toMatchObject({ source: "key" });
     expect(deepseek.unavailable).toBeUndefined();
     for (const url of ["/api/settings", "/api/threads", "/api/memory", "/api/context"]) await s.get(url);
     expect(s.responses.some((r) => r.includes(key))).toBe(false);
@@ -62,7 +63,7 @@ describe("HTTP API: credentials", () => {
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
 
     await s.request("DELETE", "/api/auth/deepseek");
-    expect((await s.get("/api/state")).auth.deepseek.configured).toBe(false);
+    expect((await s.get("/api/state")).auth.keys).toEqual([]);
   });
 
   it("drops OPENAI_API_KEY from the environment on start", async () => {

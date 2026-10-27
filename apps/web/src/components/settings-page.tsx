@@ -256,7 +256,7 @@ function BudgetsTab() {
     <div className="space-y-4">
       <Section
         title="启动上下文预算"
-        description="每次回复或检查开场注入的规则、上下文、记忆和对话摘要的总量上限。超了就拦下，提醒你精简，而不是悄悄截断。房间上下文超过自己的预算时，整理员（DeepSeek）会自动整理。"
+        description="每次回复或检查开场注入的规则、上下文、记忆和对话摘要的总量上限。超了就拦下，提醒你精简，而不是悄悄截断。房间上下文超过自己的预算时，整理员会用 DeepSeek 的 API key 自动整理（在「模型」页添加）。"
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <NumberField label="启动上下文（字节）" value={draft.budgets.briefing} onChange={(n) => budgets({ briefing: n })} step={1024} min={2048} hint={kb(draft.budgets.briefing)} />

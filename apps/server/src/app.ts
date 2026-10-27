@@ -4,6 +4,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import {
   CHAT_ACCESS,
   CONTEXT_MAX_BYTES,
+  KEY_TEMPLATES,
   ROUTES,
   listLessons,
   listMemory,
@@ -22,7 +23,7 @@ import {
 } from "@baton/core";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { MOCK_CURSOR, REPO_ROOT, WEB_DIST, nodeScriptCommand, type AppState, type Session } from "./state.ts";
+import { MOCK_CURSOR, REPO_ROOT, WEB_DIST, nodeScriptCommand, type AddKeyInput, type AppState, type ModelPickInput, type Session } from "./state.ts";
 
 const ALLOWED_HOSTS = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 const ALLOWED_ORIGIN = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
@@ -208,33 +209,54 @@ export function createApp(state: AppState): Hono {
 
   // ---------- models ----------
 
-  /** Every route with its sign-in state and models; the demo route only in the demo workspace. */
+  /** Every route with its sign-in state and models: the subscriptions, one route per API key account, and the demo only in the demo workspace. */
   app.get("/api/models", async (c) => {
     const force = c.req.query("refresh") === "1";
-    const sources: CredentialSource[] = state.demo ? ["chatgpt", "deepseek", "cursor", "demo"] : ["chatgpt", "deepseek", "cursor"];
-    const routes = await Promise.all(
-      sources.map(async (source) => {
-        const { models, error } = await state.models(source, force).catch((e: Error) => ({ models: [], error: e.message }));
-        const provider = ROUTES[source].provider;
+    const routes: { source: CredentialSource; provider?: string; template?: string }[] = [
+      { source: "chatgpt" },
+      { source: "cursor" },
+      ...state.listKeyAccounts().map((a) => ({ source: "key" as const, provider: a.provider, template: a.template })),
+      ...(state.demo ? [{ source: "demo" as const }] : []),
+    ];
+    const listed = await Promise.all(
+      routes.map(async (route) => {
+        const { models, error } = await state.models(route.source, force, undefined, route.provider).catch((e: Error) => ({ models: [], error: e.message }));
+        const provider = route.provider ?? ROUTES[route.source].provider;
         return {
-          source,
-          label: ROUTES[source].label,
-          unavailable: state.unavailable(source),
+          ...route,
+          label: route.provider ? (state.keyAccount(route.provider)?.label ?? ROUTES.key.label) : ROUTES[route.source].label,
+          unavailable: state.unavailable(route.source, undefined, route.provider),
           error,
           models: models.map((m) => ({ ...m, family: modelFamily(m.id, provider) })),
         };
       }),
     );
-    return c.json({ routes });
+    return c.json({ routes: listed });
   });
   app.get("/api/briefing", async (c) => {
     const role = (c.req.query("role") ?? "chat") as Role;
     if (role !== "chat" && role !== "review") bad("role 只能是 chat 或 review");
     const threadId = c.req.query("thread") || undefined;
     const session = (threadId && state.sessionOfThread(threadId)) || state.sessionByRoot(state.ws.root)!;
-    const model = await state.resolveModel(c.req.query("source") ?? "", c.req.query("model") ?? "", session).catch((e: Error) => bad(e.message));
+    const pick = { source: c.req.query("source"), model: c.req.query("model"), provider: c.req.query("provider"), thinking: c.req.query("thinking") };
+    const model = await state.resolveModel(pick, session).catch((e: Error) => bad(e.message));
     return c.json(await session.orchestrator.briefingPreview(model, role, threadId));
   });
+
+  // ---------- API key accounts ----------
+
+  app.get("/api/keys/templates", (c) =>
+    c.json(KEY_TEMPLATES.map((t) => ({ id: t.id, label: t.label, hint: t.hint, baseUrl: t.baseUrl, customUrl: Boolean(t.customUrl), keyless: Boolean(t.keyless), catalog: Boolean(t.catalog) }))),
+  );
+  app.post("/api/keys", async (c) => {
+    const input = await body<AddKeyInput>(c);
+    return c.json(await state.addKey(input).catch((e: Error) => bad(e.message)));
+  });
+  app.delete("/api/keys/:id", async (c) => {
+    await state.removeKey(c.req.param("id")).catch((e: Error) => bad(e.message));
+    return c.json({ ok: true });
+  });
+  app.post("/api/keys/:id/refresh", async (c) => c.json({ models: await state.refreshKeyModels(c.req.param("id")).catch((e: Error) => bad(e.message)) }));
 
   app.get("/api/stats", (c) => c.json(state.orchestrator.stats()));
 
@@ -255,10 +277,10 @@ export function createApp(state: AppState): Hono {
 
   app.get("/api/threads", (c) => c.json(state.orchestrator.listThreads().map(threadSummary)));
   app.post("/api/threads", async (c) => {
-    const input = await body<{ title?: string; task?: string; source?: string; model?: string; workspace?: string }>(c);
+    const input = await body<ModelPickInput & { title?: string; task?: string; workspace?: string }>(c);
     const session = input.workspace ? state.sessionByRoot(input.workspace) : state.sessionByRoot(state.ws.root);
     if (!session) bad("这个项目没有打开，请先在左边的项目列表里打开它");
-    const model = await state.resolveModel(input.source ?? "", input.model ?? "", session).catch((e: Error) => bad(e.message));
+    const model = await state.resolveModel(input, session).catch((e: Error) => bad(e.message));
     return c.json(session.orchestrator.createThread({ title: input.title, task: input.task ?? "", model }));
   });
   app.get("/api/threads/:id", (c) => c.json(threadOr404(c.req.param("id")).thread));
@@ -272,10 +294,10 @@ export function createApp(state: AppState): Hono {
     return c.json({ ok: true });
   });
   app.post("/api/threads/:id/messages", async (c) => {
-    const { text, source, model } = await body<{ text: string; source?: string; model?: string }>(c);
+    const { text, ...pick } = await body<ModelPickInput & { text: string }>(c);
     if (!text?.trim()) bad("消息不能为空");
     const { session, thread } = threadOr404(c.req.param("id"));
-    const picked = source || model ? await state.resolveModel(source ?? "", model ?? "", session).catch((e: Error) => bad(e.message)) : undefined;
+    const picked = pick.source || pick.model ? await state.resolveModel(pick, session).catch((e: Error) => bad(e.message)) : undefined;
     if (!picked && !thread.model) bad("请先选择一个模型");
     session.orchestrator.postMessage(thread.id, text, picked);
     return c.json({ ok: true });
@@ -292,9 +314,9 @@ export function createApp(state: AppState): Hono {
     return c.json({ ok: true });
   });
   app.post("/api/threads/:id/review", async (c) => {
-    const { source, model } = await body<{ source?: string; model?: string }>(c);
+    const pick = await body<ModelPickInput>(c);
     const { session, thread } = threadOr404(c.req.param("id"));
-    const reviewer = await state.resolveModel(source ?? "", model ?? "", session).catch((e: Error) => bad(e.message));
+    const reviewer = await state.resolveModel(pick, session).catch((e: Error) => bad(e.message));
     try {
       session.orchestrator.checkReview(thread.id, reviewer);
     } catch (error) {

@@ -1,6 +1,6 @@
 # Baton · 多模型对话工作台
 
-把你已经在付费的订阅（ChatGPT、Cursor、DeepSeek）接进同一个本地工作台：打开就是对话框，三个账号下的全部模型都能直接选、随时换着聊；改了文件之后，一键「让另一个模型检查」。每个对话属于一个项目（工作区），左边按项目分组；同一个项目里的模型读写同一批文件，共用一套上下文、记忆、工具和规则，不同项目的对话可以同时在跑。引擎是 [Pi](https://github.com/earendil-works/pi)，Cursor 的模型通过官方 Cursor Agent CLI 的 ACP 模式接入。
+把你已经在付费的订阅（ChatGPT、Cursor）和任意服务的 API key 接进同一个本地工作台：打开就是对话框，所有账号下的全部模型都能直接选、随时换着聊；改了文件之后，一键「让另一个模型检查」。每个对话属于一个项目（工作区），左边按项目分组；同一个项目里的模型读写同一批文件，共用一套上下文、记忆、工具和规则，不同项目的对话可以同时在跑。引擎是 [Pi](https://github.com/earendil-works/pi)，Cursor 的模型通过官方 Cursor Agent CLI 的 ACP 模式接入。
 
 单人、单机：本地网页和 macOS 桌面版是同一套。要做什么、验收标准和当前进度见 [`docs/spec.md`](docs/spec.md)，实现方式见 [`docs/design.md`](docs/design.md)。
 
@@ -11,8 +11,8 @@
 | 运行时 | 账号来源 | 模型 |
 |---|---|---|
 | Pi | ChatGPT 登录（Sign in with ChatGPT，或 Codex 账号） | GPT 系，只走这一条 |
-| Pi | DeepSeek API key（唯一用 key 的例外） | DeepSeek 系 |
 | Cursor Agent（ACP） | Cursor 登录（`agent login`） | Cursor 里的非 GPT、非 DeepSeek 模型（Claude、Gemini、Composer…），不提供 Auto |
+| Pi | 任意多个 API key（OpenAI、Anthropic、Gemini、DeepSeek、Kimi、智谱、通义、OpenRouter、硅基流动、Ollama、任意 OpenAI / Anthropic 兼容服务…） | 这个服务的全部模型，按量计费 |
 
 不需要建任何配置：登录之后，这个账号下的模型就出现在输入框旁的选择框里。对话和运行记录只记「账号 + 模型」。
 
@@ -48,7 +48,7 @@ pnpm dev
 
 - **ChatGPT**：点「用 ChatGPT 登录」，在浏览器完成授权，会回调到本机 1455 端口。如果工作台跑在别的机器上，把浏览器最后跳转到的 `…:1455/auth/callback…` 链接粘贴回来即可。如果 Sign in with ChatGPT 对你的账号不可用（能登 Codex CLI 却登不上这里），改点「用 Codex 账号登录」，它和 Codex CLI 是同一套登录，同样走 ChatGPT 订阅。
 - **Cursor**：先安装 Cursor Agent CLI（`curl https://cursor.com/install -fsS | bash`），再点「登录 Cursor」。没装 CLI 时可以打开「用内置的模拟 Cursor」体验 ACP 流程。
-- **DeepSeek**：填 `sk-` 开头的 API key。
+- **API key**：在「API key」里选服务（或直接粘贴 key，前缀明确的会自动认出），地址和模型列表自动装配；自定义的兼容服务填地址即可，模型列表从它的 `/models` 拉。可以加多个。房间上下文的自动整理用 DeepSeek 的 key。
 
 然后点左边「项目」旁的文件夹按钮，或到「设置 → 项目」点「选择文件夹…」，用系统的文件夹选择框打开你自己的项目目录。它会出现在侧边栏里，点它旁边的加号就在这个项目里开新对话。也可以手填路径。演示项目留在列表里，不需要时可以在「设置 → 项目」里移除（不删文件）。
 

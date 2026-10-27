@@ -43,11 +43,12 @@ describe("model families", () => {
     expect(modelFamily("demo-chat", "demo")).toBe("demo-chat");
   });
 
-  it("keeps each family on its one route", () => {
+  it("keeps each family on its one subscription route, and lets API keys offer any family", () => {
     expect(validateModelRoute("chatgpt", "gpt-5.5")).toBeUndefined();
     expect(validateModelRoute("chatgpt", "deepseek-v4-pro")).toMatch(/ChatGPT/);
-    expect(validateModelRoute("deepseek", "deepseek-v4-pro")).toBeUndefined();
-    expect(validateModelRoute("deepseek", "gpt-5.5")).toBeDefined();
+    expect(validateModelRoute("key", "deepseek-v4-pro")).toBeUndefined();
+    expect(validateModelRoute("key", "gpt-5.5")).toBeUndefined();
+    expect(validateModelRoute("key", "claude-opus-4-5")).toBeUndefined();
     expect(validateModelRoute("cursor", "claude-sonnet-5-5-medium")).toBeUndefined();
     expect(validateModelRoute("cursor", "gpt-5.6-sol")).toBeDefined();
     expect(validateModelRoute("cursor", "auto")).toBeDefined();
@@ -92,8 +93,8 @@ describe("access levels and tools per role", () => {
     expect(accessPermissions("read")).toEqual({ write: "deny", exec: "deny", network: "ask" });
     expect(accessPermissions("ask")).toEqual({ write: "ask", exec: "ask", network: "ask" });
     expect(accessPermissions("allow")).toEqual({ write: "allow", exec: "allow", network: "allow" });
-    const allow = runAgent({ source: "deepseek", model: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }, accessPermissions("allow"));
-    expect(allow).toMatchObject({ id: "deepseek:deepseek-v4-pro", name: "DeepSeek V4 Pro · DeepSeek", runtime: "pi", provider: "deepseek" });
+    const allow = runAgent({ source: "key", provider: "deepseek", account: "DeepSeek", model: "deepseek-v4-pro", name: "DeepSeek V4 Pro" }, accessPermissions("allow"));
+    expect(allow).toMatchObject({ id: "key:deepseek:deepseek-v4-pro", name: "DeepSeek V4 Pro · DeepSeek", runtime: "pi", provider: "deepseek" });
     const settings = defaultSettings("t");
     expect(shellPolicy("npm test", settings, allow).policy).toBe("allow");
     expect(shellPolicy("sudo npm test", settings, allow).policy).toBe("deny");

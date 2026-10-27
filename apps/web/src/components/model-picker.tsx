@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { SOURCE_LABEL } from "@/lib/format";
-import { findModel, sameModel, shortReason, toChatModel, useModels, type ModelRef } from "@/lib/models";
+import { findModel, routeKey, sameModel, shortReason, toChatModel, useModels, type ModelRef } from "@/lib/models";
 import { href } from "@/lib/router";
 import type { ChatModel } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,7 @@ export function ModelPicker({
   onChange,
   authorFamily,
   title = "选择模型",
-  description = "三个账号下的全部模型。没登录的账号先到「模型」页登录。",
+  description = "已登录的订阅和已添加的 API key 下的全部模型。没登录的账号先到「模型」页登录或添加 key。",
   className,
   size = "sm",
 }: {
@@ -77,7 +77,7 @@ export function ModelPicker({
               const list = route.models.filter((m) => matches(m.name, m.id, route.label, familyLabel(m.family)));
               if (q && list.length === 0) return null;
               return (
-                <section key={route.source}>
+                <section key={routeKey(route)}>
                   <h3 className="mb-1 text-xs font-medium text-muted-foreground">
                     {route.label}
                     {!route.unavailable && list.length > 0 && `（${list.length}）`}
@@ -95,7 +95,7 @@ export function ModelPicker({
                     <p className="px-2 py-1 text-xs text-muted-foreground">这个账号下没有可用模型</p>
                   ) : (
                     list.map((m) => {
-                      const ref = { source: route.source, model: m.id };
+                      const ref = { source: route.source, provider: route.provider, model: m.id };
                       const same = authorFamily !== undefined && m.family === authorFamily;
                       return (
                         <Row key={m.id} active={sameModel(ref, value)} onClick={() => choose(toChatModel({ route, option: m }))}>

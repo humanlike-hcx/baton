@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { CredentialStore } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels, type CredentialStore } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import {
   DefaultResourceLoader,
@@ -11,7 +11,9 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { CHATGPT_PROVIDERS, chatgptMethod } from "../credentials.ts";
+import { keyTemplate, type KeyAccount } from "../keys.ts";
 import { runTool, type ToolSpec } from "../tools.ts";
+import type { ThinkingLevel } from "../types.ts";
 import { newId } from "../util.ts";
 import { DEMO_CONTEXT_WINDOW, demoComplete, demoScript } from "./demo.ts";
 import { VERDICT_REMINDER, type ExecuteRequest, type ExecuteResult, type Executor } from "./types.ts";
@@ -38,6 +40,49 @@ export class PiExecutor implements Executor {
   runtime(): Promise<ModelRuntime> {
     this.runtimePromise ??= ModelRuntime.create({ credentials: this.options.credentials, modelsPath: null, refreshOnCreate: false });
     return this.runtimePromise;
+  }
+
+  /**
+   * Makes a key account's models runnable. Accounts on a Pi catalog under the catalog's own id need
+   * nothing; the rest are registered: OpenAI's catalog under another id (its own is the ChatGPT
+   * login's), and custom endpoints with the models they listed.
+   */
+  async registerKeyAccount(account: KeyAccount): Promise<void> {
+    const runtime = await this.runtime();
+    const template = keyTemplate(account.template);
+    if (template?.catalog && template.catalog === account.provider) return;
+    const models = template?.catalog
+      ? runtime.getModels(template.catalog).map((m) => {
+          const { provider: _provider, ...config } = m as unknown as Record<string, unknown>;
+          return config;
+        })
+      : (account.models ?? []).map((m) => ({
+          id: m.id,
+          name: m.name,
+          api: account.api,
+          baseUrl: account.baseUrl,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: m.contextWindow ?? 128_000,
+          maxTokens: 16_384,
+        }));
+    if (runtime.getRegisteredProviderIds().includes(account.provider)) runtime.unregisterProvider(account.provider);
+    runtime.registerProvider(account.provider, { name: account.label, baseUrl: account.baseUrl ?? template?.baseUrl, api: (account.api ?? template?.api) as never, models: models as never });
+  }
+
+  async unregisterKeyAccount(provider: string): Promise<void> {
+    const runtime = await this.runtime();
+    if (runtime.getRegisteredProviderIds().includes(provider)) runtime.unregisterProvider(provider);
+  }
+
+  /** Models of a Pi provider with the thinking levels each supports (none when it doesn't reason). */
+  async providerModels(provider: string): Promise<{ id: string; name: string; contextWindow?: number; thinking?: ThinkingLevel[] }[]> {
+    const runtime = await this.runtime();
+    return runtime.getModels(provider).map((m) => {
+      const levels = (m as { reasoning?: boolean }).reasoning ? (getSupportedThinkingLevels(m) as ThinkingLevel[]).filter((l) => l !== "off") : [];
+      return { id: m.id, name: m.name, contextWindow: m.contextWindow, thinking: levels.length ? levels : undefined };
+    });
   }
 
   /** One completion outside any run (the context tidier). The demo answers from a script instead of a model. */
@@ -87,15 +132,15 @@ export class PiExecutor implements Executor {
       model = runtime.getModel(providerId, agent.model);
     } else if (agent.source === "chatgpt") {
       const method = await chatgptMethod(this.options.credentials);
-      if (!method) return { status: "failed", finalText: "", error: "还没有用 ChatGPT 登录。请到「设置 → 账号」里登录。" };
+      if (!method) return { status: "failed", finalText: "", error: "还没有用 ChatGPT 登录。请到「模型」页登录。" };
       model = runtime.getModel(CHATGPT_PROVIDERS[method], agent.model);
       if (!model && method === "codex") {
         return { status: "failed", finalText: "", error: `用 Codex 账号登录时没有 ${agent.model}。请在对话里换一个列表里的 GPT 模型。` };
       }
     } else {
       const credential = await this.options.credentials.read(agent.provider);
-      if (agent.source === "deepseek" && credential?.type !== "api_key") {
-        return { status: "failed", finalText: "", error: "还没有配置 DeepSeek API key。请到「设置 → 账号」里填写。" };
+      if (credential?.type !== "api_key") {
+        return { status: "failed", finalText: "", error: "这个 API key 账号没有 key 或已经删除。请到「模型」页添加。" };
       }
       model = runtime.getModel(agent.provider, agent.model);
     }
@@ -136,6 +181,7 @@ export class PiExecutor implements Executor {
       agentDir: this.options.agentDir,
       modelRuntime: runtime,
       model,
+      ...(agent.thinking ? { thinkingLevel: agent.thinking } : {}),
       settingsManager,
       resourceLoader,
       sessionManager: SessionManager.create(req.workspaceRoot, path.resolve(req.sessionDir)),
@@ -199,10 +245,12 @@ export class PiExecutor implements Executor {
         totalTokens: stats.tokens.total,
         costUsd: agent.source === "demo" || agent.source === "chatgpt" ? 0 : stats.cost,
       };
+      const window = session.getContextUsage();
+      const context = window && window.tokens !== null ? { tokens: window.tokens, window: window.contextWindow } : undefined;
       const finalText = session.getLastAssistantText() ?? "";
-      if (req.signal.aborted) return { status: "cancelled", finalText, usage };
-      if (lastError) return { status: "failed", finalText, usage, error: lastError };
-      return { status: "succeeded", finalText, usage };
+      if (req.signal.aborted) return { status: "cancelled", finalText, usage, context };
+      if (lastError) return { status: "failed", finalText, usage, context, error: lastError };
+      return { status: "succeeded", finalText, usage, context };
     } catch (error) {
       if (req.signal.aborted) return { status: "cancelled", finalText: "" };
       return { status: "failed", finalText: "", error: (error as Error).message };

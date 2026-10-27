@@ -155,10 +155,11 @@ function Sidebar({ route, onNavigate }: { route: Route; onNavigate?: () => void 
     localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next));
   };
   const auth = state?.auth;
+  const keys = auth?.keys.filter((k) => k.configured).length ?? 0;
   const accounts = [
     { label: "ChatGPT", ok: auth?.chatgpt.loggedIn, off: "未登录" },
-    { label: "DeepSeek", ok: auth?.deepseek.configured, off: "未配置" },
     { label: "Cursor", ok: auth?.cursor.loggedIn, off: auth?.cursor.installed === false ? "未安装 CLI" : "未登录" },
+    { label: keys ? `API key · ${keys}` : "API key", ok: keys > 0, off: "还没添加" },
   ];
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">

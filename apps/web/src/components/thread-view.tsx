@@ -9,8 +9,8 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { del, post } from "@/lib/api";
-import { ACCESS_LABEL, ROLE_LABEL, SOURCE_LABEL, STATUS_LABEL, STATUS_TONE, kb, tokens } from "@/lib/format";
-import { findModel, rememberModel, sameModel, toChatModel, usableModels, useModels } from "@/lib/models";
+import { ACCESS_LABEL, ROLE_LABEL, STATUS_LABEL, STATUS_TONE, USD_TO_CNY, accountLabel, kb, tokens } from "@/lib/format";
+import { findModel, pickBody, rememberModel, sameModel, toChatModel, usableModels, useModels } from "@/lib/models";
 import { projectOfThread, useSwitchProject } from "@/lib/projects";
 import { navigate } from "@/lib/router";
 import { useBaton, useThread } from "@/lib/store";
@@ -42,12 +42,12 @@ function RunsPanel({ thread, onDiff }: { thread: Thread; onDiff: (runId: string,
         <h3 className="mb-1.5 text-xs font-medium text-muted-foreground">这个对话</h3>
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
           <dt className="text-muted-foreground">模型</dt>
-          <dd>{thread.model ? `${thread.model.name} · ${SOURCE_LABEL[thread.model.source]}` : "还没选"}</dd>
+          <dd>{thread.model ? `${thread.model.name} · ${accountLabel(thread.model)}` : "还没选"}</dd>
           <dt className="text-muted-foreground">权限</dt>
           <dd>{ACCESS_LABEL[thread.access]}（服务重启后回到只读）</dd>
           <dt className="text-muted-foreground">用量</dt>
           <dd>
-            {tokens(total.tokens)} tokens{total.cost > 0 ? ` · DeepSeek $${total.cost.toFixed(4)}` : ""}
+            {tokens(total.tokens)} tokens{total.cost > 0 ? ` · ¥${(total.cost * USD_TO_CNY).toFixed(2)}` : ""}
           </dd>
         </dl>
       </section>
@@ -112,7 +112,7 @@ function ReviewDialog({ thread, authorFamily, open, onOpenChange }: { thread: Th
     if (!reviewer) return;
     setStarting(true);
     try {
-      await post(`/api/threads/${thread.id}/review`, { source: reviewer.source, model: reviewer.model });
+      await post(`/api/threads/${thread.id}/review`, pickBody(reviewer));
       onOpenChange(false);
     } catch (e) {
       toast.error((e as Error).message);
@@ -213,7 +213,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
     setSending(true);
     try {
       const switching = !sameModel(replyModel, thread.model);
-      await post(`/api/threads/${thread.id}/messages`, { text, ...(switching ? { source: replyModel.source, model: replyModel.model } : {}) });
+      await post(`/api/threads/${thread.id}/messages`, { text, ...(switching ? pickBody(replyModel) : {}) });
       rememberModel(replyModel);
       setPicked(undefined);
       setText("");
@@ -281,7 +281,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
                 )}
                 {thread.model && (
                   <span className="text-xs text-muted-foreground">
-                    {thread.model.name} · {SOURCE_LABEL[thread.model.source]}
+                    {thread.model.name} · {accountLabel(thread.model)}
                   </span>
                 )}
                 {project && (

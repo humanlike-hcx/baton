@@ -5,9 +5,11 @@ export type {
   ChatModel,
   CheckResult,
   CredentialSource,
+  KeyAccountStatus,
   Lesson,
   MemoryEntry,
   ReviewVerdict,
+  ThinkingLevel,
   Role,
   RunRecord,
   Thread,
@@ -18,7 +20,7 @@ export type {
   WorkspaceSettings,
 } from "@baton/core/types";
 
-import type { AuthStatus, ChatModel, CredentialSource, ThreadStatus, WorkspaceSettings } from "@baton/core/types";
+import type { AuthStatus, ChatModel, CredentialSource, ThinkingLevel, ThreadStatus, WorkspaceSettings } from "@baton/core/types";
 
 export interface ThreadSummary {
   id: string;
@@ -52,11 +54,16 @@ export interface ModelOption {
   name: string;
   contextWindow?: number;
   family: string;
+  /** Pi routes: the thinking levels the model supports; absent when it doesn't reason. */
+  thinking?: ThinkingLevel[];
 }
 
 /** One account route from `/api/models`: why it can't be used right now (if so), and every model it offers. */
 export interface ModelRoute {
   source: CredentialSource;
+  /** Key routes: the account's Pi provider, and which service template it came from. */
+  provider?: string;
+  template?: string;
   label: string;
   unavailable?: string;
   error?: string;
@@ -67,6 +74,8 @@ export interface StatRow {
   key: string;
   runtime: string;
   source: CredentialSource;
+  provider?: string;
+  account?: string;
   model: string;
   family: string;
   runs: number;

@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { Eye, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { familyLabel } from "@baton/core/families";
+import { detectKeyTemplate } from "@baton/core/keys";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -20,14 +22,15 @@ import { Section, StatusPill, useBusy } from "./section";
 
 interface Inspecting {
   source: CredentialSource;
+  provider?: string;
   model: string;
   name: string;
 }
 
 /** One route's models: whether they can be used right now, and a way to see what each starts a chat with. */
-function RouteModels({ source, onInspect }: { source: CredentialSource; onInspect: (m: Inspecting) => void }) {
+function RouteModels({ source, provider, onInspect }: { source: CredentialSource; provider?: string; onInspect: (m: Inspecting) => void }) {
   const { routes, error } = useModels();
-  const route = routes?.find((r) => r.source === source);
+  const route = routes?.find((r) => r.source === source && r.provider === provider);
   if (!route) {
     return <p className="mt-4 border-t pt-3 text-xs text-muted-foreground">{error ?? "正在读取模型列表…"}</p>;
   }
@@ -50,7 +53,7 @@ function RouteModels({ source, onInspect }: { source: CredentialSource; onInspec
               {familyLabel(m.family)}
               {m.contextWindow ? ` · ${tokens(m.contextWindow)}` : ""}
             </span>
-            <Button variant="ghost" size="icon-sm" onClick={() => onInspect({ source, model: m.id, name: m.name })} aria-label={`查看 ${m.name} 的启动上下文`} title="查看启动上下文">
+            <Button variant="ghost" size="icon-sm" onClick={() => onInspect({ source, provider, model: m.id, name: m.name })} aria-label={`查看 ${m.name} 的启动上下文`} title="查看启动上下文">
               <Eye />
             </Button>
           </div>
@@ -72,7 +75,7 @@ function BriefingInspector({ target, onOpenChange }: { target?: Inspecting; onOp
     let cancelled = false;
     setBriefing(undefined);
     setError(undefined);
-    const query = new URLSearchParams({ source: target.source, model: target.model, role });
+    const query = new URLSearchParams({ source: target.source, model: target.model, role, ...(target.provider ? { provider: target.provider } : {}) });
     api<Briefing>(`/api/briefing?${query}`)
       .then((b) => !cancelled && setBriefing(b))
       .catch((e: Error) => !cancelled && setError(e.message));
@@ -162,12 +165,145 @@ function BriefingInspector({ target, onOpenChange }: { target?: Inspecting; onOp
   );
 }
 
+interface KeyTemplateInfo {
+  id: string;
+  label: string;
+  hint: string;
+  baseUrl?: string;
+  customUrl: boolean;
+  keyless: boolean;
+  catalog: boolean;
+}
+
+const AUTO = "auto";
+
+/** API key accounts of any common service: the template fills in the endpoint and protocol, and the models come by themselves. */
+function KeyAccounts({ onInspect }: { onInspect: (m: Inspecting) => void }) {
+  const { state, refresh } = useBaton();
+  const { refresh: refreshModels } = useModels();
+  const { busy, run } = useBusy();
+  const [templates, setTemplates] = useState<KeyTemplateInfo[]>([]);
+  const [template, setTemplate] = useState(AUTO);
+  const [key, setKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [label, setLabel] = useState("");
+  const [models, setModels] = useState("");
+
+  useEffect(() => {
+    void api<KeyTemplateInfo[]>("/api/keys/templates").then(setTemplates);
+  }, []);
+
+  const detected = template === AUTO && key.trim() ? detectKeyTemplate(key) : undefined;
+  const chosen = templates.find((t) => t.id === (template === AUTO ? detected?.id : template));
+  const endpoint = chosen && !chosen.catalog;
+  const ready = Boolean(chosen && (chosen.keyless || key.trim()) && (!chosen.customUrl || baseUrl.trim() || chosen.baseUrl));
+  const keys = state?.auth.keys ?? [];
+  const templateLabel = (id: string) => templates.find((t) => t.id === id)?.label ?? id;
+
+  const add = () =>
+    run("key-add", async () => {
+      const added = await post<{ label: string }>("/api/keys", {
+        template: chosen?.id,
+        key,
+        label: label.trim() || undefined,
+        baseUrl: endpoint ? baseUrl.trim() || chosen?.baseUrl : undefined,
+        models: endpoint && models.trim() ? models.split(/[\s,，]+/).filter(Boolean) : undefined,
+      });
+      setKey("");
+      setLabel("");
+      setModels("");
+      setBaseUrl("");
+      setTemplate(AUTO);
+      await refresh();
+      toast.success(`已添加「${added.label}」，它的模型已经能在对话里选`);
+    });
+
+  return (
+    <Section
+      title="API key"
+      description="按量计费，花费按实际用量折成人民币显示。常见服务的 key 都能加：选服务，或直接粘贴 key 自动认出是哪家；地址、协议和模型列表自动装配。key 只存在本机凭据文件里，不会再显示出来。"
+      status={<StatusPill ok={keys.some((k) => k.configured)} label={keys.length ? `${keys.length} 个账号` : "还没添加"} />}
+    >
+      <div className="space-y-4">
+        {keys.map((k) => (
+          <div key={k.id} className="rounded-lg border p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">{k.label}</span>
+              {k.label !== templateLabel(k.template) && <span className="text-xs text-muted-foreground">{templateLabel(k.template)}</span>}
+              {k.baseUrl && <span className="truncate font-mono text-xs text-muted-foreground">{k.baseUrl}</span>}
+              <span className="ml-auto flex gap-1">
+                {k.baseUrl && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy === `refresh-${k.id}`}
+                    onClick={() =>
+                      run(`refresh-${k.id}`, async () => {
+                        const res = await post<{ models: number }>(`/api/keys/${k.id}/refresh`);
+                        await refreshModels();
+                        toast.success(`重新拉到 ${res.models} 个模型`);
+                      })
+                    }
+                  >
+                    <RefreshCw className={cn(busy === `refresh-${k.id}` && "animate-spin")} /> 刷新模型
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" disabled={busy === `remove-${k.id}`} onClick={() => run(`remove-${k.id}`, async () => (await del(`/api/keys/${k.id}`), refresh()))}>
+                  移除
+                </Button>
+              </span>
+            </div>
+            <RouteModels source="key" provider={k.provider} onInspect={onInspect} />
+          </div>
+        ))}
+
+        <div className="space-y-2 rounded-lg border border-dashed p-3">
+          <div className="text-sm font-medium">添加 API key</div>
+          <div className="grid gap-2 sm:grid-cols-[14rem_1fr]">
+            <Select value={template} onValueChange={setTemplate}>
+              <SelectTrigger aria-label="服务" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AUTO}>按 key 自动认出</SelectItem>
+                {templates.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={chosen?.keyless ? "不需要 key，可以留空" : "粘贴 API key"} autoComplete="off" className="font-mono" aria-label="API key" />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {template === AUTO && key.trim()
+              ? chosen
+                ? `认出是 ${chosen.label}。${chosen.hint}`
+                : "从前缀认不出是哪家（很多服务都用 sk- 开头），请在左边选择服务。不会拿这个 key 去挨个试。"
+              : (chosen?.hint ?? "选服务，或直接粘贴 key。")}
+          </p>
+          {endpoint && (
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={chosen?.baseUrl ?? "服务地址，例如 https://example.com/v1"} className="font-mono text-xs" aria-label="服务地址" />
+              <Input value={models} onChange={(e) => setModels(e.target.value)} placeholder="模型名（可选，服务没有 /models 时手填，逗号分隔）" className="text-xs" aria-label="模型名" />
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={`显示名（可选，默认「${chosen?.label ?? "服务名"}」）`} className="text-xs" aria-label="显示名" />
+            <Button disabled={!ready || busy === "key-add"} onClick={add}>
+              {busy === "key-add" && <Loader2 className="animate-spin" />}添加
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 function Accounts({ onInspect }: { onInspect: (m: Inspecting) => void }) {
   const { state, refresh } = useBaton();
   const { busy, run } = useBusy();
   const [manual, setManual] = useState("");
-  const [deepseekKey, setDeepseekKey] = useState("");
-  const keyMalformed = deepseekKey.trim() !== "" && !/^sk-[A-Za-z0-9_-]{16,}$/.test(deepseekKey.trim());
   const [cursorCommand, setCursorCommand] = useState("");
   const auth = state?.auth;
   const settings = state?.settings;
@@ -197,7 +333,7 @@ function Accounts({ onInspect }: { onInspect: (m: Inspecting) => void }) {
 
       <Section
         title="ChatGPT"
-        description="GPT 系模型只从这里接入，跑在 Pi 运行时里。Cursor 里的 GPT 模型不会出现，避免重复。"
+        description="用 ChatGPT 订阅使用 GPT 系模型，跑在 Pi 运行时里。Cursor 里的 GPT 模型不会出现，避免重复；想按量用 GPT，可以在下面添加 OpenAI 的 API key。"
         status={<StatusPill ok={auth.chatgpt.loggedIn} label={auth.chatgpt.loggedIn ? (auth.chatgpt.method === "codex" ? "已登录 · Codex 账号" : "已登录") : "未登录"} />}
       >
         {auth.chatgpt.error && !auth.chatgpt.pending && !auth.chatgpt.loggedIn && (
@@ -277,7 +413,7 @@ function Accounts({ onInspect }: { onInspect: (m: Inspecting) => void }) {
 
       <Section
         title="Cursor"
-        description="Cursor 订阅里的非 GPT、非 DeepSeek 模型（Claude、Gemini、Composer…）通过官方 Cursor Agent CLI 的 ACP 模式接入。"
+        description="Cursor 订阅里的非 GPT、非 DeepSeek 模型（Claude、Gemini、Composer…）通过官方 Cursor Agent CLI 的 ACP 模式接入。DeepSeek 请用 API key。"
         status={<StatusPill ok={auth.cursor.loggedIn} label={auth.cursor.loggedIn ? auth.cursor.account ?? "已登录" : auth.cursor.installed ? "未登录" : "未安装 CLI"} />}
       >
         <div className="space-y-3">
@@ -331,46 +467,7 @@ function Accounts({ onInspect }: { onInspect: (m: Inspecting) => void }) {
         <RouteModels source="cursor" onInspect={onInspect} />
       </Section>
 
-      <Section
-        title="DeepSeek"
-        description="唯一用 API key 的来源，按 API 实际花费计费；房间上下文的自动整理也用它。"
-        status={<StatusPill ok={auth.deepseek.configured} label={auth.deepseek.configured ? "已配置" : "未配置"} />}
-      >
-        {auth.deepseek.configured ? (
-          <Button variant="outline" disabled={busy === "ds-clear"} onClick={() => run("ds-clear", async () => (await del("/api/auth/deepseek"), refresh()))}>
-            移除 key
-          </Button>
-        ) : (
-          <div className="space-y-1.5">
-            <div className="flex gap-2">
-              <Input
-                type="password"
-                value={deepseekKey}
-                onChange={(e) => setDeepseekKey(e.target.value)}
-                placeholder="sk-…"
-                autoComplete="off"
-                aria-invalid={keyMalformed}
-                className="font-mono"
-              />
-              <Button
-                disabled={!deepseekKey.trim() || keyMalformed || busy === "ds"}
-                onClick={() =>
-                  run("ds", async () => {
-                    await post("/api/auth/deepseek", { key: deepseekKey });
-                    setDeepseekKey("");
-                    await refresh();
-                    toast.success("已保存 DeepSeek key");
-                  })
-                }
-              >
-                保存
-              </Button>
-            </div>
-            {keyMalformed && <p className="text-xs text-destructive">格式不对：DeepSeek key 以 sk- 开头，后面至少 16 位字母、数字、- 或 _。</p>}
-          </div>
-        )}
-        <RouteModels source="deepseek" onInspect={onInspect} />
-      </Section>
+      <KeyAccounts onInspect={onInspect} />
       {state.workspace.demo && (
         <Section title="演示" description="脚本化的假模型，只在演示工作区里可用，不消耗任何额度。" status={<StatusPill ok label="可用" />}>
           <RouteModels source="demo" onInspect={onInspect} />
@@ -392,7 +489,7 @@ export function ModelsPage() {
           <div>
             <h1 className="text-xl font-semibold">模型</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              登录账号后，它下面的全部模型都能在对话里直接选，不需要任何配置。一个模型家族只走一条线路：GPT 只走 ChatGPT，DeepSeek 只走 DeepSeek key，其余走 Cursor。凭据只保存在本机{" "}
+              登录订阅或添加 API key 后，它下面的全部模型都能在对话里直接选，不需要任何配置。两个订阅之间一个模型家族只走一条线路（GPT 走 ChatGPT，其余走 Cursor）；API key 可以接任何服务，和订阅重复的模型也保留，按账号区分。凭据只保存在本机{" "}
               <code className="rounded bg-muted px-1">~/.baton/credentials.json</code>（权限 0600），不会发给浏览器或工具。
             </p>
           </div>

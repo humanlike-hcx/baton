@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { post } from "@/lib/api";
 import { ACCESS } from "@/lib/format";
-import { findModel, lastModel, rememberModel, toChatModel, usableModels, useModels } from "@/lib/models";
+import { findModel, lastModel, pickBody, rememberModel, toChatModel, usableModels, useModels } from "@/lib/models";
 import { chooseProjectDirectory, useSwitchProject } from "@/lib/projects";
 import { href, navigate } from "@/lib/router";
 import { useBaton } from "@/lib/store";
@@ -37,7 +37,7 @@ export function NewChat() {
     if (!text.trim() || !model || sending) return;
     setSending(true);
     try {
-      const body = { source: model.source, model: model.model, workspace: state?.workspace.root };
+      const body = { ...pickBody(model), workspace: state?.workspace.root };
       let thread: Thread;
       if (access === "read") {
         thread = await post<Thread>("/api/threads", { ...body, task: text });
@@ -139,7 +139,7 @@ export function NewChat() {
             <a className="mx-1 text-primary underline-offset-2 hover:underline" href={href({ page: "models" })}>
               「模型」页
             </a>
-            登录 ChatGPT、Cursor 或填写 DeepSeek key。
+            登录 ChatGPT、Cursor，或添加任意服务的 API key。
           </div>
         )}
         {state.workspace.demo && (

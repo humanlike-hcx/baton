@@ -5,7 +5,7 @@ import { CHAT_RECENT_TURNS, chatTurns, compileBriefing } from "./context.ts";
 import type { AcpExecutor } from "./executors/acp.ts";
 import type { PiExecutor } from "./executors/pi.ts";
 import type { ExecutorEvent, McpLaunch } from "./executors/types.ts";
-import { ROUTES, modelFamily } from "./families.ts";
+import { ROUTES, modelFamily, modelProvider, routeLabel } from "./families.ts";
 import { REVIEW_PERMISSIONS, accessPermissions, canWrite } from "./permissions.ts";
 import { ShadowGit } from "./snapshot.ts";
 import { MCP_TOOLS, runTool, toolsFor, type ToolContext, type ToolOutput } from "./tools.ts";
@@ -69,15 +69,22 @@ const REVIEW_DIFF_BYTES = 16 * 1024;
 
 export function runAgent(model: ChatModel, permissions: RunAgent["permissions"]): RunAgent {
   const route = ROUTES[model.source];
+  const provider = modelProvider(model);
   return {
-    id: `${model.source}:${model.model}`,
-    name: `${model.name} · ${route.label}`,
+    id: model.source === "key" ? `key:${provider}:${model.model}` : `${model.source}:${model.model}`,
+    name: `${model.name} · ${routeLabel(model)}`,
     runtime: route.runtime,
     source: model.source,
-    provider: route.provider,
+    provider,
     model: model.model,
+    thinking: model.thinking,
     permissions,
   };
+}
+
+/** Same account, model and thinking level. */
+export function sameChatModel(a: ChatModel | undefined, b: ChatModel | undefined): boolean {
+  return Boolean(a && b && a.source === b.source && a.model === b.model && (a.provider ?? "") === (b.provider ?? "") && (a.thinking ?? "") === (b.thinking ?? ""));
 }
 
 export class Orchestrator {
@@ -249,7 +256,7 @@ export class Orchestrator {
   }
 
   private switchModel(thread: Thread, model: ChatModel | undefined): void {
-    if (!model || (model.source === thread.model?.source && model.model === thread.model.model)) return;
+    if (!model || sameChatModel(model, thread.model)) return;
     const previous = thread.model ? runAgent(thread.model, REVIEW_PERMISSIONS).name : undefined;
     thread.model = model;
     const name = runAgent(model, REVIEW_PERMISSIONS).name;
@@ -302,7 +309,7 @@ export class Orchestrator {
 
     const files = [...new Set(changed.flatMap((r) => r.changedFiles))];
     const authors = [...new Set(changed.map((r) => r.family))];
-    const family = modelFamily(model.model, ROUTES[model.source].provider);
+    const family = modelFamily(model.model, modelProvider(model));
     const same = authors.includes(family) ? `（和改动作者同属 ${family} 家族，可能看不出自己的盲点）` : "";
     thread.status = "running";
     this.notice(thread, "info", `请 ${agent.name} 只读检查这个对话里的改动${same}：先跑检查命令，再读改动。`);
@@ -420,9 +427,11 @@ export class Orchestrator {
       agentId: agent.id,
       agentName: agent.name,
       source: agent.source,
+      provider: agent.source === "key" ? agent.provider : undefined,
       runtime: agent.runtime,
       model: agent.model,
       family: modelFamily(agent.model, agent.provider),
+      thinking: agent.thinking,
       role,
       status: "running",
       startedAt: nowIso(),
@@ -520,6 +529,7 @@ export class Orchestrator {
     run.finalText = result.finalText;
     run.error = result.error;
     run.usage = result.usage;
+    run.context = result.context;
     run.endedAt = nowIso();
     try {
       run.snapshotAfter = await this.shadow.snapshot(`after ${run.id}`);
@@ -637,10 +647,11 @@ export class Orchestrator {
   stats(): StatRow[] {
     const rows = new Map<string, StatRow>();
     const row = (run: RunRecord) => {
-      const key = `${run.runtime}:${run.model}`;
+      const source = run.source ?? sourceOf(run);
+      const key = run.provider ? `${run.runtime}:${run.provider}:${run.model}` : `${run.runtime}:${run.model}`;
       let r = rows.get(key);
       if (!r) {
-        r = { key, runtime: run.runtime, source: run.source ?? sourceOf(run), model: run.model, family: run.family, runs: 0, succeeded: 0, failed: 0, changes: 0, reviewsGiven: 0, reviewedPass: 0, reviewedFail: 0, costUsd: 0, tokens: 0 };
+        r = { key, runtime: run.runtime, source, provider: run.provider, account: run.source === "key" ? run.agentName.split(" · ").at(-1) : undefined, model: run.model, family: run.family, runs: 0, succeeded: 0, failed: 0, changes: 0, reviewsGiven: 0, reviewedPass: 0, reviewedFail: 0, costUsd: 0, tokens: 0 };
         rows.set(key, r);
       }
       return r;
@@ -672,6 +683,9 @@ export interface StatRow {
   key: string;
   runtime: string;
   source: CredentialSource;
+  /** Key routes: the account's Pi provider and label. */
+  provider?: string;
+  account?: string;
   model: string;
   family: string;
   /** Chat replies and reviews. */
@@ -692,8 +706,16 @@ export interface StatRow {
 function sourceOf(run: RunRecord): CredentialSource {
   if (run.runtime === "cursor") return "cursor";
   if (run.family === "gpt") return "chatgpt";
-  if (run.family === "deepseek") return "deepseek";
+  if (run.family === "deepseek") return "key";
   return "demo";
+}
+
+/** Before any API key could be added, DeepSeek was its own route; it is now the key account on provider "deepseek". */
+function migrateDeepSeek<T extends { source?: string; provider?: string }>(x: T): boolean {
+  if ((x.source as string) !== "deepseek") return false;
+  x.source = "key";
+  x.provider = "deepseek";
+  return true;
 }
 
 const CHAT_SUMMARY_MAX_TURNS = 30;
@@ -717,7 +739,10 @@ function rollChatSummary(thread: Thread): string {
 function migrateThread(saved: Thread): Thread {
   const t = saved as Thread & { kind?: string; access?: ChatAccess };
   const items = (t.items ?? []).filter((i) => ITEM_KINDS.has(i.kind));
-  if (t.access && t.notes && items.length === t.items.length) return t;
+  let moved = t.model ? migrateDeepSeek(t.model) : false;
+  if (moved && t.model) t.model.account ??= "DeepSeek";
+  for (const run of t.runs ?? []) moved = migrateDeepSeek(run) || moved;
+  if (t.access && t.notes && items.length === t.items.length) return moved ? { ...t } : t;
   for (const item of items) if (item.kind === "run_start" && !item.role) (item as { role: Role }).role = "chat";
   return {
     id: t.id,

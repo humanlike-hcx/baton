@@ -14,12 +14,11 @@ describe("HTTP API: one page for accounts and models (US-95)", () => {
   it("lists every account route with its sign-in state and all its models, each tagged with its family", async () => {
     const s = await testServer();
     const { routes } = await s.get<{ routes: Route[] }>("/api/models");
-    expect(routes.map((r) => r.source)).toEqual(["chatgpt", "deepseek", "cursor", "demo"]);
+    expect(routes.map((r) => r.source)).toEqual(["chatgpt", "cursor", "demo"]);
     const by = Object.fromEntries(routes.map((r) => [r.source, r]));
     expect(by.chatgpt!.unavailable).toContain("ChatGPT");
-    expect(by.deepseek!.unavailable).toContain("DeepSeek API key");
-    expect(by.deepseek!.models.length).toBeGreaterThan(0);
-    expect(by.deepseek!.models.every((m) => m.family === "deepseek")).toBe(true);
+    expect(by.chatgpt!.models.length).toBeGreaterThan(0);
+    expect(by.chatgpt!.models.every((m) => m.family === "gpt")).toBe(true);
     expect(by.cursor!.unavailable).toBeUndefined();
     expect(by.cursor!.models.map((m) => m.id)).toEqual(["composer-2.5", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high", "gemini-4-argon-medium", "grok-4.7-medium"]);
     expect(by.cursor!.models.find((m) => m.id === "claude-sonnet-5-5-medium")).toMatchObject({ name: "Claude Sonnet 5.5 Medium", family: "claude" });

@@ -27,8 +27,16 @@ import {
   type ChatGptMethod,
   type CursorModel,
   type CursorStatus,
+  type KeyAccount,
+  type KeyAccountStatus,
   type OrchestratorEvent,
+  type ThinkingLevel,
   type TidyModel,
+  detectKeyTemplate,
+  discoverModels,
+  keyTemplate,
+  newId,
+  nowIso,
 } from "@baton/core";
 import { chooseDirectory, type DirectoryPicker } from "./picker.ts";
 
@@ -75,6 +83,25 @@ export interface ModelOption {
   id: string;
   name: string;
   contextWindow?: number;
+  /** Pi routes: the thinking levels the model supports; absent when it doesn't reason. */
+  thinking?: ThinkingLevel[];
+}
+
+/** What the browser names when it picks a model. */
+export interface ModelPickInput {
+  source?: string;
+  model?: string;
+  provider?: string;
+  thinking?: string;
+}
+
+export interface AddKeyInput {
+  template?: string;
+  key?: string;
+  label?: string;
+  baseUrl?: string;
+  /** Model ids to use when the endpoint has no `/models`. */
+  models?: string[];
 }
 
 /** Login errors can quote token responses; keep anything token-like out of what reaches the browser. */
@@ -107,7 +134,10 @@ export class AppState {
   private sessions = new Map<string, Session>();
   private current!: Session;
   private persisted: Persisted;
-  private auth: { chatgpt?: ChatGptMethod; deepseek: boolean } = { deepseek: false };
+  private auth: { chatgpt?: ChatGptMethod } = {};
+  private keyAccounts: KeyAccount[] = [];
+  /** Providers whose key is in the credential store. */
+  private keysConfigured = new Set<string>();
   private chatgptError?: string;
   /** Each project names its own Cursor CLI command, so sign-in state and models are kept per command. */
   private cursorByCommand = new Map<string, CursorStatus>();
@@ -208,6 +238,7 @@ export class AppState {
         console.error(`[baton] could not open ${root}:`, (error as Error).message);
       }
     }
+    await this.loadKeyAccounts();
     await this.refreshAuth(true);
   }
 
@@ -280,13 +311,13 @@ export class AppState {
       ws,
       pi: this.pi,
       acp: this.acp,
-      unavailable: (model) => this.unavailable(model.source, session),
+      unavailable: (model) => this.unavailable(model.source, session, model.provider),
       onEvent: (event: OrchestratorEvent) => this.broadcast({ ...event, workspace: ws.root }),
       mcpLaunch: (token) => ({ command: process.execPath, args: [MCP_BIN], env: { ...NODE_ENV_VARS, BATON_URL: this.baseUrl, BATON_TOKEN: token } }),
     });
     const tidier = new ContextTidier(ws, {
       model: () => this.tidyModel(demo),
-      unavailableReason: () => "整理员用 DeepSeek，请先到「模型」页填写 DeepSeek API key",
+      unavailableReason: () => "整理员用 DeepSeek，请先到「模型」页添加 DeepSeek 的 API key",
       onChange: () => this.broadcast({ type: "tidy", workspace: ws.root }),
     });
     ws.onContextWrite = () => tidier.maybeAuto();
@@ -304,14 +335,17 @@ export class AppState {
   // ---------- auth ----------
 
   /** Why a route can't run right now for a chat in `session`, with where to fix it; undefined when it can. */
-  unavailable(source: CredentialSource, session: Session = this.current): string | undefined {
+  unavailable(source: CredentialSource, session: Session = this.current, provider?: string): string | undefined {
     switch (source) {
       case "demo":
         return session.demo ? undefined : "演示模型只在演示工作区里可用";
       case "chatgpt":
         return this.auth.chatgpt ? undefined : "还没有用 ChatGPT 登录，请到「模型」页登录";
-      case "deepseek":
-        return this.auth.deepseek ? undefined : "还没有配置 DeepSeek API key，请到「模型」页填写";
+      case "key": {
+        const account = this.keyAccounts.find((a) => a.provider === provider);
+        if (!account) return "这个 API key 账号已经删除，请到「模型」页重新添加";
+        return this.keysConfigured.has(account.provider) ? undefined : `「${account.label}」还没有 key，请到「模型」页填写`;
+      }
       case "cursor": {
         const cursor = this.cursorStatusOf(session);
         return cursor.loggedIn ? undefined : cursor.installed ? "Cursor 还没有登录，请到「模型」页登录" : "没有找到 Cursor CLI，请到「模型」页查看安装方法";
@@ -326,9 +360,9 @@ export class AppState {
   }
 
   async refreshAuth(includeCursor = false): Promise<void> {
-    const deepseek = await this.credentials.read("deepseek");
     this.auth.chatgpt = await chatgptMethod(this.credentials);
-    this.auth.deepseek = deepseek?.type === "api_key" && Boolean(deepseek.key);
+    const configured = await Promise.all(this.keyAccounts.map(async (a) => [a.provider, (await this.credentials.read(a.provider))?.type === "api_key"] as const));
+    this.keysConfigured = new Set(configured.filter(([, ok]) => ok).map(([p]) => p));
     const currentCommand = this.ws.settings().cursor.command;
     if (includeCursor || Date.now() - this.cursorCheckedAt > 60_000 || !this.cursorByCommand.has(currentCommand)) {
       this.cursorCheckedAt = Date.now();
@@ -346,9 +380,104 @@ export class AppState {
         pending: this.chatgptLogin?.url ? { url: this.chatgptLogin.url, method: this.chatgptLogin.method } : undefined,
         error: this.chatgptError,
       },
-      deepseek: { configured: this.auth.deepseek },
       cursor: { ...this.cursorStatusOf(this.current), pending: this.cursorLoginFlow?.url ? { url: this.cursorLoginFlow.url } : undefined },
+      keys: this.keyAccounts.map((a): KeyAccountStatus => ({ id: a.id, template: a.template, label: a.label, provider: a.provider, baseUrl: a.baseUrl, configured: this.keysConfigured.has(a.provider) })),
     };
+  }
+
+  // ---------- API key accounts ----------
+
+  private get keysFile(): string {
+    return path.join(this.home, "keys.json");
+  }
+
+  /** Loads the key accounts; a DeepSeek key saved before any key could be added becomes the first account. */
+  private async loadKeyAccounts(): Promise<void> {
+    if (fs.existsSync(this.keysFile)) {
+      this.keyAccounts = readJson<{ accounts?: KeyAccount[] }>(this.keysFile, {}).accounts ?? [];
+    } else if ((await this.credentials.read("deepseek"))?.type === "api_key") {
+      this.keyAccounts = [{ id: "deepseek", template: "deepseek", label: "DeepSeek", provider: "deepseek", addedAt: nowIso() }];
+      this.saveKeyAccounts();
+    }
+    for (const account of this.keyAccounts) await this.pi.registerKeyAccount(account);
+  }
+
+  private saveKeyAccounts(): void {
+    writeFileAtomic(this.keysFile, `${JSON.stringify({ accounts: this.keyAccounts }, null, 2)}\n`);
+  }
+
+  /** Adds (or, for a catalog service already added, re-keys) an account. The key goes only to the credential store. */
+  async addKey(input: AddKeyInput): Promise<KeyAccountStatus> {
+    const key = (input.key ?? "").trim();
+    const template = input.template ? keyTemplate(input.template) : detectKeyTemplate(key);
+    if (!template) throw new Error(input.template ? `不认识的服务：${input.template}` : "认不出这是哪家服务的 key，请先选择服务");
+    if (/\s/.test(key)) throw new Error("key 里不能有空格或换行");
+    if (!template.keyless && key.length < 8) throw new Error("请填写 API key");
+    if (template.id === "deepseek" && !/^sk-[A-Za-z0-9_-]{16,}$/.test(key)) throw new Error("DeepSeek API key 格式不对（应以 sk- 开头）");
+    const secret = key || "local";
+
+    let account: KeyAccount;
+    if (template.catalog) {
+      const provider = template.provider ?? template.catalog;
+      account = this.keyAccounts.find((a) => a.provider === provider) ?? { id: template.id, template: template.id, label: input.label?.trim() || template.label, provider, addedAt: nowIso() };
+    } else {
+      const baseUrl = (input.baseUrl?.trim() || template.baseUrl || "").replace(/\/+$/, "");
+      if (!/^https?:\/\/\S+$/.test(baseUrl)) throw new Error("请填写以 http:// 或 https:// 开头的服务地址");
+      const api = template.api ?? "openai-completions";
+      const typed = (input.models ?? []).map((m) => m.trim()).filter(Boolean);
+      const models = typed.length ? typed.map((id) => ({ id, name: id })) : await discoverModels({ api, baseUrl, key: secret });
+      const id = newId("key");
+      const sameLabel = this.keyAccounts.filter((a) => a.template === template.id).length;
+      account = {
+        id,
+        template: template.id,
+        label: input.label?.trim() || (sameLabel ? `${template.label} ${sameLabel + 1}` : template.label),
+        provider: `custom-${id}`,
+        api,
+        baseUrl,
+        models,
+        addedAt: nowIso(),
+      };
+    }
+    await this.credentials.modify(account.provider, async () => ({ type: "api_key", key: secret }));
+    if (!this.keyAccounts.includes(account)) this.keyAccounts.push(account);
+    this.saveKeyAccounts();
+    await this.pi.registerKeyAccount(account);
+    await this.refreshAuth();
+    this.broadcast({ type: "state" });
+    return this.authStatus().keys.find((k) => k.id === account.id)!;
+  }
+
+  async removeKey(id: string): Promise<void> {
+    const account = this.keyAccounts.find((a) => a.id === id);
+    if (!account) throw new Error("没有这个 API key 账号");
+    await this.credentials.delete(account.provider);
+    await this.pi.unregisterKeyAccount(account.provider);
+    this.keyAccounts = this.keyAccounts.filter((a) => a !== account);
+    this.saveKeyAccounts();
+    await this.refreshAuth();
+    this.broadcast({ type: "state" });
+  }
+
+  /** Reloads a custom endpoint's `/models`. */
+  async refreshKeyModels(id: string): Promise<number> {
+    const account = this.keyAccounts.find((a) => a.id === id);
+    if (!account) throw new Error("没有这个 API key 账号");
+    if (!account.baseUrl || !account.api) throw new Error("这个服务的模型列表来自内置目录，不需要刷新");
+    const credential = await this.credentials.read(account.provider);
+    const key = credential?.type === "api_key" ? (credential.key ?? "") : "";
+    account.models = await discoverModels({ api: account.api, baseUrl: account.baseUrl, key });
+    this.saveKeyAccounts();
+    await this.pi.registerKeyAccount(account);
+    return account.models.length;
+  }
+
+  keyAccount(provider: string): KeyAccount | undefined {
+    return this.keyAccounts.find((a) => a.provider === provider);
+  }
+
+  listKeyAccounts(): KeyAccount[] {
+    return this.keyAccounts;
   }
 
   /** Starts a ChatGPT login with either method and resolves with the authorization URL. */
@@ -424,16 +553,14 @@ export class AppState {
     await this.refreshAuth();
   }
 
+  /** The DeepSeek-only endpoints from before any key could be added. */
   async setDeepSeekKey(key: string): Promise<void> {
-    const trimmed = key.trim();
-    if (!/^sk-[A-Za-z0-9_-]{16,}$/.test(trimmed)) throw new Error("DeepSeek API key 格式不对（应以 sk- 开头）");
-    await this.credentials.modify("deepseek", async () => ({ type: "api_key", key: trimmed }));
-    await this.refreshAuth();
+    await this.addKey({ template: "deepseek", key });
   }
 
   async clearDeepSeekKey(): Promise<void> {
-    await this.credentials.delete("deepseek");
-    await this.refreshAuth();
+    const account = this.keyAccount("deepseek");
+    if (account) await this.removeKey(account.id);
   }
 
   async startCursorLogin(): Promise<string> {
@@ -459,35 +586,39 @@ export class AppState {
     return result;
   }
 
-  /** GPT models come from the signed-in ChatGPT method, so the list matches what runs can use. */
-  async listPiModels(provider: "openai" | "deepseek") {
-    const runtime = await this.pi.runtime();
-    const piProvider = provider === "openai" && this.auth.chatgpt ? CHATGPT_PROVIDERS[this.auth.chatgpt] : provider;
-    return runtime
-      .getModels(piProvider)
-      .filter((m) => provider !== "openai" || /^(gpt-5|gpt-6|o3|o4)/.test(m.id))
-      .map((m) => ({ id: m.id, name: m.name, contextWindow: m.contextWindow }));
-  }
-
-  /** Every model a route offers; the demo models only exist in the demo workspace. */
-  async models(source: CredentialSource, force = false, session: Session = this.current): Promise<{ models: ModelOption[]; error?: string }> {
+  /** Every model a route offers; the demo models only exist in the demo workspace. GPT models follow the signed-in ChatGPT method. */
+  async models(source: CredentialSource, force = false, session: Session = this.current, provider?: string): Promise<{ models: ModelOption[]; error?: string }> {
     if (source === "demo") return { models: session.demo ? DEMO_MODELS : [] };
     if (source === "cursor") return this.listCursorModels(force, session);
-    return { models: await this.listPiModels(source === "chatgpt" ? "openai" : "deepseek") };
+    if (source === "key") {
+      const account = provider ? this.keyAccount(provider) : undefined;
+      return { models: account ? await this.pi.providerModels(account.provider) : [] };
+    }
+    const piProvider = this.auth.chatgpt ? CHATGPT_PROVIDERS[this.auth.chatgpt] : "openai";
+    return { models: (await this.pi.providerModels(piProvider)).filter((m) => /^(gpt-5|gpt-6|o3|o4)/.test(m.id)) };
   }
 
-  /** A model the user picked for a chat in `session`, checked against its route's live list ("one family, one route" included). */
-  async resolveModel(source: string, model: string, session: Session = this.current): Promise<ChatModel> {
+  /** A model the user picked for a chat in `session`, checked against its route's live list ("one family, one route" between subscriptions included). */
+  async resolveModel(pick: ModelPickInput, session: Session = this.current): Promise<ChatModel> {
+    const source = pick.source ?? "";
+    const model = pick.model ?? "";
     const routeError = validateModelRoute(source, model);
     if (routeError) throw new Error(routeError);
     const route = source as CredentialSource;
-    const found = (await this.models(route, false, session)).models.find((m) => m.id === model);
-    if (!found) throw new Error(`${ROUTES[route].label} 线路上没有模型 ${model}`);
-    return { source: route, model, name: found.name || model };
+    const account = route === "key" ? (pick.provider ? this.keyAccount(pick.provider) : undefined) : undefined;
+    if (route === "key" && !account) throw new Error("没有这个 API key 账号，请到「模型」页添加");
+    const found = (await this.models(route, false, session, account?.provider)).models.find((m) => m.id === model);
+    if (!found) throw new Error(`${account?.label ?? ROUTES[route].label} 线路上没有模型 ${model}`);
+    let thinking: ThinkingLevel | undefined;
+    if (pick.thinking) {
+      if (!found.thinking?.includes(pick.thinking as ThinkingLevel)) throw new Error(`${found.name || model} 不支持思考档位 ${pick.thinking}`);
+      thinking = pick.thinking as ThinkingLevel;
+    }
+    return { source: route, model, name: found.name || model, provider: account?.provider, account: account?.label, thinking };
   }
 
   private tidyModel(demo: boolean): TidyModel | undefined {
-    if (!demo && !this.auth.deepseek) return undefined;
+    if (!demo && !this.keysConfigured.has("deepseek")) return undefined;
     const model = demo ? "demo-tidy" : "deepseek-v4-pro";
     return {
       name: model,

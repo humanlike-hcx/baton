@@ -6,13 +6,20 @@
 
 ## 1. 范围
 
-第一版接入三条路径，每个模型家族只走一条：
+两个订阅之间每个模型家族只走一条线路；API key 账号可以接任何服务，和订阅重复的模型也保留（2026-10-27）：
 
 | 运行时 | 额度来源 | 模型 | 说明 |
 |---|---|---|---|
-| Pi（我们的循环） | ChatGPT 登录（Sign in with ChatGPT，或与 Codex CLI 相同的 Codex 账号登录） | GPT 系 | GPT 只走这一条 |
-| Pi（我们的循环） | DeepSeek API key | DeepSeek 系 | 唯一允许使用 key 的例外 |
+| Pi（我们的循环） | ChatGPT 登录（Sign in with ChatGPT，或与 Codex CLI 相同的 Codex 账号登录） | GPT 系 | 订阅里 GPT 只走这一条 |
 | Cursor Agent（通过 ACP） | Cursor 登录（`agent login`） | Cursor 账号可用的非 GPT、非 DeepSeek 模型 | 过滤掉 GPT 和 DeepSeek 家族，不提供 Auto |
+| Pi（我们的循环） | 任意多个 API key 账号 | 这个服务的全部模型（包括 GPT） | 按量计费，见下面「API key 账号」 |
+
+**API key 账号**（US-101）：
+- 账号记在 `~/.baton/keys.json`（服务模板、显示名、Pi provider、自定义地址和模型列表），key 本身只在凭据文件里，存在账号的 provider 名下。线路记为 `source: "key"`，对话和运行另记 `provider` 和账号名。
+- 模板见 `packages/core/src/keys.ts`。Pi 内置目录里有的服务（Anthropic、Gemini、DeepSeek、Kimi、智谱、OpenRouter、xAI、Mistral、Groq…）直接用 Pi 的目录：模型、上下文窗口、价格、思考档位都来自那里，key 存在同名 provider 下。OpenAI 的 key 不能放在 `openai` 下（那是 Sign in with ChatGPT 的位置），所以把 OpenAI 的目录复制注册成 `openai-key`。其余服务（通义百炼、硅基流动、本地 Ollama、任意 OpenAI / Anthropic 兼容地址）注册成 `custom-<编号>`，模型列表来自服务的 `/models`，拉不到时可以手填模型名。
+- 只按「只有一家会发」的前缀自动认出模板（`sk-ant-`、`sk-or-`、`AIza`、`xai-`、`gsk_`、`fw_`、`sk-proj-`）；`sk-` 这种很多家都用的前缀不猜，让用户选。不会拿一个 key 去多家服务试。
+- 服务返回的错误信息里可能引用请求，展示前把长串打码。
+- 早先单独保存的 DeepSeek key（凭据里有 `deepseek`、还没有 `keys.json`）在启动时自动变成一个 DeepSeek 账号；旧对话里 `source: "deepseek"` 的模型和运行记录迁移成 `source: "key", provider: "deepseek"`。`/api/auth/deepseek` 保留为添加或移除 DeepSeek 账号的别名。房间上下文整理员仍然用 DeepSeek 账号。
 
 ChatGPT 有两种登录方式，都走 ChatGPT 订阅，同一时间只保留一个凭证：
 
@@ -124,7 +131,7 @@ AGENTS.md                 # 公共规则，Pi 和 Cursor 都会读；由工作�
 6. 任何检查命令失败、出错或跳过时，结论不能是通过：模型判了通过也按不通过记，并在结论里注明（`overruled`），问题里加上「检查命令没有通过：…」。
 7. 结论作为一条 `review` 贴回对话；检查期间用户发的消息，检查结束后接着由对话的模型回复。
 
-**统计**：按「运行时 + 模型」记运行次数、成功与失败、改了文件的回复数、它的改动被别的模型检查时通过与不通过的次数、它替别人检查的次数、token 和花费。订阅线路的花费显示「订阅内」，DeepSeek 按实际花费换算成人民币。
+**统计**：按「运行时 + 模型」记运行次数、成功与失败、改了文件的回复数、它的改动被别的模型检查时通过与不通过的次数、它替别人检查的次数、token 和花费。订阅线路的花费显示「订阅内」，API key 账号按实际花费换算成人民币（价格来自 Pi 的目录，自定义服务没有价格表时记为 0）。key 账号的统计行按账号分开。
 
 ## 7. 检查命令
 

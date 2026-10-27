@@ -1,7 +1,10 @@
 /** "chat" answers the user; "review" is the read-only check another model runs on a chat's changes. */
 export type Role = "chat" | "review";
 export type RuntimeKind = "pi" | "cursor";
-export type CredentialSource = "chatgpt" | "deepseek" | "cursor" | "demo";
+/** Two subscriptions, any number of API key accounts, and the offline demo. */
+export type CredentialSource = "chatgpt" | "cursor" | "key" | "demo";
+/** Pi's reasoning levels; each model supports a subset. */
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type Policy = "allow" | "ask" | "deny";
 export type Risk = "read" | "write" | "exec" | "network" | "memory";
 /** What a chat lets its model do: read only, ask before each change, or change directly. */
@@ -19,6 +22,12 @@ export interface ChatModel {
   model: string;
   /** Display name from the route's model list. */
   name: string;
+  /** Key routes: the account's Pi provider ("deepseek", "anthropic", "custom-…"). */
+  provider?: string;
+  /** Key routes: the account's label, shown next to the model. */
+  account?: string;
+  /** Pi routes: the reasoning level; absent means the model's default. */
+  thinking?: ThinkingLevel;
 }
 
 /** Who answers a run: a model on its route, with the permissions this run allows. Built per run, never stored. */
@@ -28,9 +37,10 @@ export interface RunAgent {
   name: string;
   runtime: RuntimeKind;
   source: CredentialSource;
-  /** Pi provider id ("openai", "deepseek", "demo"); "cursor" for the ACP runtime. */
+  /** Pi provider id ("openai", "deepseek", "custom-…", "demo"); "cursor" for the ACP runtime. */
   provider: string;
   model: string;
+  thinking?: ThinkingLevel;
   permissions: AgentPermissions;
 }
 
@@ -102,9 +112,12 @@ export interface RunRecord {
   agentId: string;
   agentName: string;
   source: CredentialSource;
+  /** Key routes: the account's Pi provider. */
+  provider?: string;
   runtime: RuntimeKind;
   model: string;
   family: string;
+  thinking?: ThinkingLevel;
   role: Role;
   status: RunStatus;
   startedAt: string;
@@ -114,6 +127,8 @@ export interface RunRecord {
   briefingHash: string;
   briefingBytes: number;
   usage?: Usage;
+  /** How full the model's context window was at the end of the run; absent when the runtime doesn't say (Cursor). */
+  context?: { tokens: number; window: number };
   changedFiles: string[];
   finalText: string;
   error?: string;
@@ -199,10 +214,20 @@ export interface Briefing {
 /** "chatgpt" is Sign in with ChatGPT; "codex" is the ChatGPT login the Codex CLI uses. Both bill the ChatGPT subscription. */
 export type ChatGptMethod = "chatgpt" | "codex";
 
+/** A key account as the browser sees it: never the key. */
+export interface KeyAccountStatus {
+  id: string;
+  template: string;
+  label: string;
+  provider: string;
+  baseUrl?: string;
+  configured: boolean;
+}
+
 export interface AuthStatus {
   chatgpt: { loggedIn: boolean; method?: ChatGptMethod; pending?: { url: string; method: ChatGptMethod }; error?: string };
-  deepseek: { configured: boolean };
   cursor: { installed: boolean; loggedIn: boolean; account?: string; pending?: { url: string }; error?: string };
+  keys: KeyAccountStatus[];
 }
 
 export interface TidyMemory {

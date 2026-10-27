@@ -38,6 +38,8 @@ export interface ExecuteResult {
   status: "succeeded" | "failed" | "cancelled";
   finalText: string;
   usage?: Usage;
+  /** How full the context window was when the run ended, if the runtime reports it. */
+  context?: { tokens: number; window: number };
   error?: string;
 }
 

@@ -43,9 +43,10 @@ describe("chats: pick any model a signed-in account offers (US-92)", () => {
       [{ source: "openrouter", model: "x" }, "不支持的账号来源"],
       [{ source: "cursor", model: "gpt-5.6-sol" }, "GPT 系模型只走 ChatGPT"],
       [{ source: "cursor", model: "auto" }, "不提供 Auto"],
-      [{ source: "cursor", model: "deepseek-v41-flash-1017-medium" }, "DeepSeek 系模型只走 DeepSeek key"],
+      [{ source: "cursor", model: "deepseek-v41-flash-1017-medium" }, "DeepSeek 系模型通过 API key 使用"],
       [{ source: "chatgpt", model: "claude-sonnet-5-5-medium" }, "只能使用 GPT 系模型"],
-      [{ source: "deepseek", model: "gpt-5.5" }, "只能使用 DeepSeek 模型"],
+      [{ source: "key", model: "gpt-5.5" }, "没有这个 API key 账号"],
+      [{ source: "key", provider: "anthropic", model: "claude-opus-4-5" }, "没有这个 API key 账号"],
       [{ source: "cursor", model: "no-such-model" }, "Cursor 线路上没有模型 no-such-model"],
       [{ source: "demo", model: "demo-plan" }, "没有模型 demo-plan"],
     ];
@@ -66,9 +67,9 @@ describe("chats: pick any model a signed-in account offers (US-92)", () => {
   it("refuses a model whose account is not signed in, and says where to sign in", async () => {
     const s = await testServer();
     const models = await s.get<{ routes: { source: string; unavailable?: string; models: { id: string }[] }[] }>("/api/models");
-    const deepseek = models.routes.find((r) => r.source === "deepseek")!;
-    expect(deepseek.unavailable).toContain("DeepSeek API key");
-    const created = await s.post<Thread>("/api/threads", { task: "在吗", source: "deepseek", model: deepseek.models[0]!.id });
+    const chatgpt = models.routes.find((r) => r.source === "chatgpt")!;
+    expect(chatgpt.unavailable).toContain("ChatGPT");
+    const created = await s.post<Thread>("/api/threads", { task: "在吗", source: "chatgpt", model: chatgpt.models[0]!.id });
     const t = await s.waitForThread(created.id, (x) => x.status === "paused", "refusal");
     expect(t.runs).toHaveLength(0);
     expect(t.items.some((i) => i.kind === "notice" && i.text.includes("现在不能回复") && i.text.includes("「模型」页"))).toBe(true);

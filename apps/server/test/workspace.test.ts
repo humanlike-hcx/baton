@@ -153,13 +153,13 @@ describe("HTTP API: signing out (US-9)", () => {
     await s.post("/api/auth/deepseek", { key: "sk-baton0test0secret0key0123456789" });
     let state = await s.get("/api/state");
     expect(state.auth.chatgpt.loggedIn).toBe(true);
-    expect(state.auth.deepseek.configured).toBe(true);
+    expect(state.auth.keys.map((k: { provider: string }) => k.provider)).toEqual(["deepseek"]);
 
     await s.post("/api/auth/chatgpt/logout");
     await s.request("DELETE", "/api/auth/deepseek");
     state = await s.get("/api/state");
     expect(state.auth.chatgpt.loggedIn).toBe(false);
-    expect(state.auth.deepseek.configured).toBe(false);
+    expect(state.auth.keys).toEqual([]);
     const routes = (await s.get<{ routes: { source: string; unavailable?: string }[] }>("/api/models")).routes;
     expect(routes.find((r) => r.source === "chatgpt")?.unavailable).toContain("ChatGPT");
     expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({});

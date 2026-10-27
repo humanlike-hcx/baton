@@ -5,10 +5,8 @@ import { familyLabel } from "@baton/core/families";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import { RUNTIME_LABEL, SOURCE_LABEL, tokens } from "@/lib/format";
+import { RUNTIME_LABEL, SOURCE_LABEL, costLabel, tokens } from "@/lib/format";
 import type { StatRow } from "@/lib/types";
-
-const USD_TO_CNY = 7.2;
 
 function pct(n: number, d: number): string {
   return d ? `${Math.round((n / d) * 100)}%` : "—";
@@ -75,7 +73,7 @@ export function StatsPage() {
                     <td className="px-3 py-2">
                       <div className="font-mono text-xs">{r.model}</div>
                       <div className="text-xs text-muted-foreground">
-                        {SOURCE_LABEL[r.source]} · {RUNTIME_LABEL[r.runtime] ?? r.runtime} · {familyLabel(r.family)}
+                        {r.account ?? SOURCE_LABEL[r.source]} · {RUNTIME_LABEL[r.runtime] ?? r.runtime} · {familyLabel(r.family)}
                       </div>
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{r.runs}</td>
@@ -88,14 +86,14 @@ export function StatsPage() {
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{r.reviewsGiven || "—"}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{tokens(r.tokens)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{r.source === "deepseek" ? `¥${(r.costUsd * USD_TO_CNY).toFixed(2)}` : r.source === "demo" ? "免费" : "订阅内"}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{costLabel(r.source, r.costUsd)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
-        <p className="mt-3 text-xs text-muted-foreground">ChatGPT 和 Cursor 走订阅，不按 token 计费；DeepSeek 按 API 实际花费换算成人民币。</p>
+        <p className="mt-3 text-xs text-muted-foreground">ChatGPT 和 Cursor 走订阅，不按 token 计费；API key 账号按实际花费换算成人民币（自定义服务没有价格表时记为 ¥0）。</p>
       </div>
     </div>
   );

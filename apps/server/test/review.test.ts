@@ -96,7 +96,7 @@ describe("「让另一个模型检查」(US-94, US-66, US-67)", () => {
 
     for (const [model, error] of [
       [{ source: "cursor", model: "gpt-5.6-sol" }, "GPT 系模型只走 ChatGPT"],
-      [{ source: "deepseek", model: "deepseek-v4-pro" }, "现在不能检查"],
+      [{ source: "chatgpt", model: "gpt-6.1-sol" }, "现在不能检查"],
     ] as const) {
       await s.say(chat.id, `写文件：notes/${model.source}.md`);
       const res = await s.request("POST", `/api/threads/${chat.id}/review`, model);

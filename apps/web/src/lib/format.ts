@@ -1,4 +1,4 @@
-import type { ChatAccess, CredentialSource, Role, ThreadStatus } from "./types";
+import type { ChatAccess, ChatModel, CredentialSource, Role, ThreadStatus } from "./types";
 
 export const ROLE_LABEL: Record<Role, string> = { chat: "对话", review: "检查" };
 
@@ -26,10 +26,23 @@ export const ACCESS_LABEL: Record<ChatAccess, string> = { read: "只读", ask: "
 
 export const SOURCE_LABEL: Record<CredentialSource, string> = {
   chatgpt: "ChatGPT",
-  deepseek: "DeepSeek",
   cursor: "Cursor",
+  key: "API key",
   demo: "演示",
 };
+
+/** The account a model runs on: a key account's own name, or the subscription's. */
+export function accountLabel(model: Pick<ChatModel, "source" | "account">): string {
+  return model.source === "key" ? (model.account ?? SOURCE_LABEL.key) : SOURCE_LABEL[model.source];
+}
+
+export const USD_TO_CNY = 7.2;
+
+/** Key accounts bill per use (shown in yuan); subscriptions are already paid for. */
+export function costLabel(source: CredentialSource, usd: number, digits = 2): string {
+  if (source === "key") return `¥${(usd * USD_TO_CNY).toFixed(digits)}`;
+  return source === "demo" ? "免费" : "订阅内";
+}
 
 export const RUNTIME_LABEL: Record<string, string> = { pi: "Pi", cursor: "Cursor Agent" };
 

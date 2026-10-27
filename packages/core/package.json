@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
-    "./families": "./src/families.ts"
+    "./families": "./src/families.ts",
+    "./keys": "./src/keys.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
