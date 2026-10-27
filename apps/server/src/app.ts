@@ -6,6 +6,7 @@ import {
   CONTEXT_MAX_BYTES,
   KEY_TEMPLATES,
   ROUTES,
+  cursorVariant,
   listLessons,
   listMemory,
   modelFamily,
@@ -227,7 +228,7 @@ export function createApp(state: AppState): Hono {
           label: route.provider ? (state.keyAccount(route.provider)?.label ?? ROUTES.key.label) : ROUTES[route.source].label,
           unavailable: state.unavailable(route.source, undefined, route.provider),
           error,
-          models: models.map((m) => ({ ...m, family: modelFamily(m.id, provider) })),
+          models: models.map((m) => ({ ...m, family: modelFamily(m.id, provider), ...(route.source === "cursor" ? { variant: cursorVariant(m.id, m.name) } : {}) })),
         };
       }),
     );
@@ -387,6 +388,11 @@ export function createApp(state: AppState): Hono {
   app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
   if (process.env.NODE_ENV === "production" && fs.existsSync(WEB_DIST)) {
+    // index.html names the hashed bundle of this build; a cached copy would run the previous build against this API.
+    app.use("/*", async (c, next) => {
+      await next();
+      if (!c.req.path.startsWith("/assets/")) c.header("Cache-Control", "no-cache");
+    });
     app.use("/*", serveStatic({ root: path.relative(process.cwd(), WEB_DIST) }));
     app.get("*", (c) => c.html(fs.readFileSync(path.join(WEB_DIST, "index.html"), "utf8")));
   } else {

@@ -14,6 +14,12 @@
 | Cursor Agent（通过 ACP） | Cursor 登录（`agent login`） | Cursor 账号可用的非 GPT、非 DeepSeek 模型 | 过滤掉 GPT 和 DeepSeek 家族，不提供 Auto |
 | Pi（我们的循环） | 任意多个 API key 账号 | 这个服务的全部模型（包括 GPT） | 按量计费，见下面「API key 账号」 |
 
+**思考档位**（US-100）：Pi 线路的档位来自 Pi 的 `getSupportedThinkingLevels`（模型不推理就没有档位），对话记在 `model.thinking`，运行时传给 `createAgentSession` 的 `thinkingLevel`，服务端拒绝模型不支持的档位；只换档位时对话里提示「思考档位从…改成…」。Cursor 把档位编在模型名里（`-low`…`-max`、`-thinking`、`-fast`，前后顺序不固定），`cursorVariant` 把它们拆成基础模型和变体，界面按基础模型合并成一行，换档位就是换成同一基础模型的另一个变体。
+
+**上下文圆圈**（US-98）：Pi 运行结束时取 `session.getContextUsage()`，记在运行的 `context: {tokens, window}`；界面取这个模型在这个对话里最近一次回复的数字，还没回复时按模型的窗口算 0%。Cursor 不报告用量，圆圈显示「—」并说明原因。
+
+**输入框**（US-99）：新对话和对话页共用 `Composer`：权限胶囊（只读 / 每次问我 / 允许直接改，后者橙色）、模型胶囊（模型名 · 档位，下拉里切档位或「换模型…」）、圆形发送按钮；下面一行是项目、对话编号、花费和上下文圆圈。
+
 **API key 账号**（US-101）：
 - 账号记在 `~/.baton/keys.json`（服务模板、显示名、Pi provider、自定义地址和模型列表），key 本身只在凭据文件里，存在账号的 provider 名下。线路记为 `source: "key"`，对话和运行另记 `provider` 和账号名。
 - 模板见 `packages/core/src/keys.ts`。Pi 内置目录里有的服务（Anthropic、Gemini、DeepSeek、Kimi、智谱、OpenRouter、xAI、Mistral、Groq…）直接用 Pi 的目录：模型、上下文窗口、价格、思考档位都来自那里，key 存在同名 provider 下。OpenAI 的 key 不能放在 `openai` 下（那是 Sign in with ChatGPT 的位置），所以把 OpenAI 的目录复制注册成 `openai-key`。其余服务（通义百炼、硅基流动、本地 Ollama、任意 OpenAI / Anthropic 兼容地址）注册成 `custom-<编号>`，模型列表来自服务的 `/models`，拉不到时可以手填模型名。

@@ -80,8 +80,8 @@ export class PiExecutor implements Executor {
   async providerModels(provider: string): Promise<{ id: string; name: string; contextWindow?: number; thinking?: ThinkingLevel[] }[]> {
     const runtime = await this.runtime();
     return runtime.getModels(provider).map((m) => {
-      const levels = (m as { reasoning?: boolean }).reasoning ? (getSupportedThinkingLevels(m) as ThinkingLevel[]).filter((l) => l !== "off") : [];
-      return { id: m.id, name: m.name, contextWindow: m.contextWindow, thinking: levels.length ? levels : undefined };
+      const levels = (m as { reasoning?: boolean }).reasoning ? (getSupportedThinkingLevels(m) as ThinkingLevel[]) : [];
+      return { id: m.id, name: m.name, contextWindow: m.contextWindow, thinking: levels.some((l) => l !== "off") ? levels : undefined };
     });
   }
 

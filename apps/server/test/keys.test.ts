@@ -118,6 +118,8 @@ describe("HTTP API: any API key, assembled automatically (US-101)", () => {
     const t = await s.settled(created.id);
     expect(t.runs[0]).toMatchObject({ status: "succeeded", source: "key", provider: added.provider, model: "qwen-max", family: "qwen" });
     expect(t.runs[0]!.agentName).toBe("qwen-max · 公司网关");
+    expect(t.runs[0]!.context).toMatchObject({ window: 128_000 });
+    expect(t.runs[0]!.context!.tokens).toBeGreaterThan(1000);
     expect(t.items.some((i) => i.kind === "text" && i.text.includes("来自兼容服务的回复"))).toBe(true);
     const chat = fake.seen.find((r) => r.path === "/v1/chat/completions")!;
     expect(chat).toMatchObject({ auth: `Bearer ${key}`, body: expect.objectContaining({ model: "qwen-max" }) });

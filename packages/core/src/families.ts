@@ -63,6 +63,53 @@ export function validateModelRoute(source: string, model: string): string | unde
   }
 }
 
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+const THINKING_LABELS: Record<string, string> = { off: "关闭", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最高" };
+
+export function thinkingLabel(level: string | undefined): string {
+  return level ? (THINKING_LABELS[level] ?? level) : "默认";
+}
+
+/** One of the variants Cursor lists a model as: its effort, whether it thinks, whether it's the fast one. */
+export interface CursorVariant {
+  /** Id without the variant suffixes; variants with the same base are one model. */
+  base: string;
+  /** Display name without the variant words. */
+  baseName: string;
+  effort?: string;
+  reasoning: boolean;
+  fast: boolean;
+}
+
+const EFFORT_SUFFIX = /-(minimal|low|medium|high|xhigh|max)$/;
+const NAME_WORDS = /\s+(Fast|No Thinking|Thinking|Minimal|Low|Medium|High|Extra High|Max)$/i;
+
+/** Splits a Cursor model id like `claude-opus-5-thinking-high-fast` or `claude-4.6-opus-high-thinking` into base and variant. */
+export function cursorVariant(id: string, name: string): CursorVariant {
+  let rest = id;
+  let effort: string | undefined;
+  let reasoning = false;
+  let fast = false;
+  for (;;) {
+    if (!fast && rest.endsWith("-fast")) {
+      fast = true;
+      rest = rest.slice(0, -5);
+    } else if (!reasoning && rest.endsWith("-thinking")) {
+      reasoning = true;
+      rest = rest.slice(0, -9);
+    } else if (!effort && EFFORT_SUFFIX.test(rest)) {
+      effort = EFFORT_SUFFIX.exec(rest)![1];
+      rest = rest.replace(EFFORT_SUFFIX, "");
+    } else break;
+  }
+  const clean = name.replace(/[\u200b-\u200d\ufeff]/g, "").replace(/\s+/g, " ").trim();
+  const note = /\s*(\([^)]*\))$/.exec(clean)?.[1];
+  let baseName = note ? clean.slice(0, -note.length).trim() : clean;
+  while (NAME_WORDS.test(baseName)) baseName = baseName.replace(NAME_WORDS, "");
+  return { base: rest || id, baseName: note ? `${baseName} ${note}` : baseName, effort, reasoning, fast };
+}
+
 export function familyLabel(family: string): string {
   const labels: Record<string, string> = {
     gpt: "GPT",

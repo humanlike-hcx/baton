@@ -5,7 +5,7 @@ import { CHAT_RECENT_TURNS, chatTurns, compileBriefing } from "./context.ts";
 import type { AcpExecutor } from "./executors/acp.ts";
 import type { PiExecutor } from "./executors/pi.ts";
 import type { ExecutorEvent, McpLaunch } from "./executors/types.ts";
-import { ROUTES, modelFamily, modelProvider, routeLabel } from "./families.ts";
+import { ROUTES, modelFamily, modelProvider, routeLabel, thinkingLabel } from "./families.ts";
 import { REVIEW_PERMISSIONS, accessPermissions, canWrite } from "./permissions.ts";
 import { ShadowGit } from "./snapshot.ts";
 import { MCP_TOOLS, runTool, toolsFor, type ToolContext, type ToolOutput } from "./tools.ts";
@@ -257,6 +257,12 @@ export class Orchestrator {
 
   private switchModel(thread: Thread, model: ChatModel | undefined): void {
     if (!model || sameChatModel(model, thread.model)) return;
+    const before = thread.model;
+    if (before && sameChatModel({ ...model, thinking: before.thinking }, before)) {
+      thread.model = model;
+      this.push(thread, { kind: "notice", level: "info", text: `思考档位从「${thinkingLabel(before.thinking)}」改成「${thinkingLabel(model.thinking)}」。` }, false);
+      return;
+    }
     const previous = thread.model ? runAgent(thread.model, REVIEW_PERMISSIONS).name : undefined;
     thread.model = model;
     const name = runAgent(model, REVIEW_PERMISSIONS).name;

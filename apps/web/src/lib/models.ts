@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { api } from "./api";
+import { costLabel } from "./format";
 import { useBaton } from "./store";
-import type { ChatModel, ModelOption, ModelRoute } from "./types";
+import type { ChatModel, ModelOption, ModelRoute, Thread } from "./types";
 
 export type ModelRef = Pick<ChatModel, "source" | "model" | "provider" | "thinking">;
 
@@ -79,6 +80,11 @@ export function sameModel(a?: ModelRef, b?: ModelRef): boolean {
   return Boolean(a && b && a.source === b.source && a.model === b.model && (a.provider ?? "") === (b.provider ?? ""));
 }
 
+/** Same account, model and thinking level. */
+export function sameChoice(a?: ModelRef, b?: ModelRef): boolean {
+  return sameModel(a, b) && (a?.thinking ?? "") === (b?.thinking ?? "");
+}
+
 export function toChatModel(p: ModelPick): ChatModel {
   return {
     source: p.route.source,
@@ -91,6 +97,76 @@ export function toChatModel(p: ModelPick): ChatModel {
 /** What a model pick sends to the server. */
 export function pickBody(model: ModelRef): Record<string, string> {
   return { source: model.source, model: model.model, ...(model.provider ? { provider: model.provider } : {}), ...(model.thinking ? { thinking: model.thinking } : {}) };
+}
+
+/** One row of the picker: a model, or for Cursor every variant of one base model. */
+export interface ModelEntry {
+  key: string;
+  route: ModelRoute;
+  name: string;
+  family: string;
+  options: ModelOption[];
+}
+
+export function routeEntries(route: ModelRoute): ModelEntry[] {
+  const entries = new Map<string, ModelEntry>();
+  for (const m of route.models) {
+    const base = m.variant?.base ?? m.id;
+    const name = m.variant?.baseName ?? m.name;
+    const entry = entries.get(base);
+    if (entry) {
+      entry.options.push(m);
+      if (name.length < entry.name.length) entry.name = name;
+    } else {
+      entries.set(base, { key: `${routeKey(route)}:${base}`, route, name, family: m.family, options: [m] });
+    }
+  }
+  return [...entries.values()];
+}
+
+const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "max"];
+const DEFAULT_EFFORT = [undefined, "medium", "high", "low", "xhigh", "max", "minimal"];
+
+export function effortRank(effort: string | undefined): number {
+  return effort ? EFFORT_ORDER.indexOf(effort) : -1;
+}
+
+/** The variant to start a Cursor model on: like `like` where it can be, otherwise not fast, not thinking, a middle effort. */
+export function pickVariant(options: ModelOption[], like?: Partial<Pick<NonNullable<ModelOption["variant"]>, "effort" | "reasoning" | "fast">>): ModelOption {
+  const score = (m: ModelOption) => {
+    const v = m.variant;
+    if (!v) return 0;
+    const effort = like?.effort !== undefined ? Math.abs(effortRank(v.effort) - effortRank(like.effort)) : DEFAULT_EFFORT.indexOf(v.effort);
+    return (v.fast === (like?.fast ?? false) ? 0 : 100) + (v.reasoning === (like?.reasoning ?? false) ? 0 : 50) + effort;
+  };
+  return [...options].sort((a, b) => score(a) - score(b))[0]!;
+}
+
+/** The entry a chosen model belongs to. */
+export function entryOf(routes: ModelRoute[] | undefined, ref: ModelRef | undefined): { entry: ModelEntry; option: ModelOption } | undefined {
+  const found = findModel(routes, ref);
+  if (!found) return undefined;
+  const entry = routeEntries(found.route).find((e) => e.options.includes(found.option));
+  return entry ? { entry, option: found.option } : undefined;
+}
+
+/** The context ring's numbers: the last reply on this model, or this model's window before it has replied. */
+export function chatContext(model: ModelRef | undefined, option: ModelOption | undefined, thread?: Thread): { used?: number; window?: number; unknown?: string } {
+  if (model?.source === "cursor") return { unknown: "Cursor 不报告上下文用量，这里没法显示。" };
+  const last = thread ? [...thread.runs].reverse().find((r) => r.role === "chat" && r.context) : undefined;
+  if (last?.context && model && last.model === model.model && (last.provider ?? "") === (model.provider ?? "")) return { used: last.context.tokens, window: last.context.window };
+  if (option?.contextWindow) return { window: option.contextWindow };
+  return { unknown: model ? "这个模型没有提供上下文窗口大小。" : "还没选模型。" };
+}
+
+/** What a chat has cost: key accounts in yuan, subscriptions already paid for. */
+export function chatCost(thread: Thread | undefined, model: ModelRef | undefined): string | undefined {
+  const runs = thread?.runs ?? [];
+  const keyRuns = runs.filter((r) => r.source === "key");
+  if (keyRuns.length) return costLabel("key", keyRuns.reduce((sum, r) => sum + (r.usage?.costUsd ?? 0), 0));
+  if (runs.length) return runs.every((r) => r.source === "demo") ? "免费" : "订阅内";
+  if (!model) return undefined;
+  return model.source === "key" ? "按量计费" : costLabel(model.source, 0);
 }
 
 /** Usable models in route order; the demo route first in the demo workspace. */

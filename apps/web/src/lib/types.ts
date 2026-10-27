@@ -20,6 +20,7 @@ export type {
   WorkspaceSettings,
 } from "@baton/core/types";
 
+import type { CursorVariant } from "@baton/core/families";
 import type { AuthStatus, ChatModel, CredentialSource, ThinkingLevel, ThreadStatus, WorkspaceSettings } from "@baton/core/types";
 
 export interface ThreadSummary {
@@ -56,6 +57,8 @@ export interface ModelOption {
   family: string;
   /** Pi routes: the thinking levels the model supports; absent when it doesn't reason. */
   thinking?: ThinkingLevel[];
+  /** Cursor: which variant of a model this id is. */
+  variant?: CursorVariant;
 }
 
 /** One account route from `/api/models`: why it can't be used right now (if so), and every model it offers. */

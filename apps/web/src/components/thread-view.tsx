@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowUp, ClipboardCheck, CircleStop, FileDiff, FolderOpen, Hash, Loader2, PanelRight, Trash2 } from "lucide-react";
+import { AlertTriangle, ClipboardCheck, CircleStop, FileDiff, FolderOpen, Hash, Loader2, PanelRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { familyLabel } from "@baton/core/families";
 import { Badge } from "@/components/ui/badge";
@@ -7,16 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
 import { del, post } from "@/lib/api";
 import { ACCESS_LABEL, ROLE_LABEL, STATUS_LABEL, STATUS_TONE, USD_TO_CNY, accountLabel, kb, tokens } from "@/lib/format";
-import { findModel, pickBody, rememberModel, sameModel, toChatModel, usableModels, useModels } from "@/lib/models";
+import { chatContext, chatCost, findModel, pickBody, rememberModel, sameChoice, toChatModel, usableModels, useModels } from "@/lib/models";
 import { projectOfThread, useSwitchProject } from "@/lib/projects";
 import { navigate } from "@/lib/router";
 import { useBaton, useThread } from "@/lib/store";
 import type { ChatAccess, ChatModel, Thread } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { AccessSwitch } from "./access-switch";
+import { Composer } from "./composer";
 import { DiffDialog } from "./diff-dialog";
 import { ModelPicker } from "./model-picker";
 import { TimelineView } from "./timeline";
@@ -137,7 +136,6 @@ function ReviewDialog({ thread, authorFamily, open, onOpenChange }: { thread: Th
             authorFamily={authorFamily}
             title="选择检查的模型"
             description={authorFamily ? `改动是 ${familyLabel(authorFamily)} 家族的模型做的，推荐选别的家族。` : "推荐选和改动作者不同家族的模型。"}
-            size="default"
             className="flex w-full"
           />
           {sameFamily && (
@@ -170,6 +168,7 @@ function composerHint(thread: Thread): string {
 
 export function ThreadView({ threadId }: { threadId: string }) {
   const { thread, error, loading } = useThread(threadId);
+  const { routes } = useModels();
   const { state } = useBaton();
   const project = projectOfThread(state, threadId);
   const projectRoot = project?.root;
@@ -212,7 +211,7 @@ export function ThreadView({ threadId }: { threadId: string }) {
     if (!replyModel) return toast.error("请先选择一个模型");
     setSending(true);
     try {
-      const switching = !sameModel(replyModel, thread.model);
+      const switching = !sameChoice(replyModel, thread.model);
       await post(`/api/threads/${thread.id}/messages`, { text, ...(switching ? pickBody(replyModel) : {}) });
       rememberModel(replyModel);
       setPicked(undefined);
@@ -339,31 +338,31 @@ export function ThreadView({ threadId }: { threadId: string }) {
           </div>
         </div>
 
-        <div className="border-t px-4 py-3 sm:px-6">
-          <div className="mx-auto mb-2 flex max-w-4xl flex-wrap items-center gap-x-3 gap-y-2">
-            <ModelPicker value={replyModel} onChange={setPicked} className="max-w-80 min-w-48" />
-            {picked && !sameModel(picked, thread.model) && <span className="text-xs text-muted-foreground">下一条消息由它接着回复</span>}
-            <div className="ml-auto">
-              <AccessSwitch value={thread.access} onChange={(a) => void setAccess(a)} disabled={thread.status === "running"} />
-            </div>
-          </div>
-          <div className="mx-auto flex max-w-4xl items-end gap-2">
-            <Textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder={composerHint(thread)}
-              className="max-h-40 min-h-11 resize-none"
+        <div className="px-4 pt-1 pb-3 sm:px-6">
+          <div className="mx-auto max-w-4xl">
+            <Composer
+              text={text}
+              onText={setText}
+              onSend={() => void send()}
+              sending={sending}
               rows={1}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
+              label="消息"
+              placeholder={composerHint(thread)}
+              access={thread.access}
+              onAccess={(a) => void setAccess(a)}
+              accessDisabled={thread.status === "running"}
+              model={replyModel}
+              onModel={setPicked}
+              footerLeft={
+                <>
+                  {project && <span className="truncate">{project.name}</span>}
+                  <span className="shrink-0 font-mono">对话 {thread.id.slice(-8)}</span>
+                  {picked && !sameChoice(picked, thread.model) && <span className="shrink-0 text-foreground">· 下一条消息按新选择回复</span>}
+                </>
+              }
+              cost={chatCost(thread, replyModel)}
+              context={chatContext(replyModel, findModel(routes, replyModel)?.option, thread)}
             />
-            <Button size="icon-lg" disabled={!text.trim() || sending} onClick={() => void send()} aria-label="发送">
-              {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-            </Button>
           </div>
         </div>
       </div>

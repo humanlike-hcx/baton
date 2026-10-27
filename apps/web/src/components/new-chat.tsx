@@ -1,19 +1,16 @@
 import { useState } from "react";
-import { ArrowUp, FolderOpen, Loader2 } from "lucide-react";
+import { FolderOpen } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
 import { post } from "@/lib/api";
 import { ACCESS } from "@/lib/format";
-import { findModel, lastModel, pickBody, rememberModel, toChatModel, usableModels, useModels } from "@/lib/models";
+import { chatContext, chatCost, findModel, lastModel, pickBody, rememberModel, toChatModel, usableModels, useModels } from "@/lib/models";
 import { chooseProjectDirectory, useSwitchProject } from "@/lib/projects";
 import { href, navigate } from "@/lib/router";
 import { useBaton } from "@/lib/store";
 import type { ChatAccess, ChatModel, Thread } from "@/lib/types";
-import { AccessSwitch } from "./access-switch";
-import { ModelPicker } from "./model-picker";
+import { Composer } from "./composer";
 
 const OPEN_OTHER = "__open_other__";
 
@@ -29,9 +26,12 @@ export function NewChat() {
   const [sending, setSending] = useState(false);
 
   const demo = state?.workspace.demo ?? false;
-  const remembered = findModel(routes, lastModel());
-  const fallback = (remembered && !remembered.route.unavailable ? remembered : undefined) ?? usableModels(routes, demo)[0];
-  const model = picked ?? (fallback ? toChatModel(fallback) : undefined);
+  const last = lastModel();
+  const remembered = findModel(routes, last);
+  const usable = remembered && !remembered.route.unavailable ? remembered : undefined;
+  const fallback = usable ?? usableModels(routes, demo)[0];
+  const thinking = usable && last?.thinking && usable.option.thinking?.includes(last.thinking) ? last.thinking : undefined;
+  const model = picked ?? (fallback ? { ...toChatModel(fallback), ...(thinking ? { thinking } : {}) } : undefined);
 
   const send = async () => {
     if (!text.trim() || !model || sending) return;
@@ -81,57 +81,51 @@ export function NewChat() {
         <h1 className="text-center text-2xl font-semibold">在 {state.workspace.name} 里聊点什么？</h1>
         <p className="mt-2 text-center text-sm text-muted-foreground">选一个模型直接聊，随时可以换。改了文件之后，可以让另一个模型检查。</p>
 
-        <div className="mt-6 rounded-2xl border bg-card p-3 shadow-sm focus-within:ring-2 focus-within:ring-ring/30">
-          <Textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={4}
+        <div className="mt-6">
+          <Composer
+            text={text}
+            onText={setText}
+            onSend={() => void send()}
+            sending={sending}
+            rows={3}
             autoFocus
-            aria-label="第一条消息"
+            label="第一条消息"
             placeholder="例如：帮我看看 src/ 下面的结构，哪里适合加一个导出配置的按钮？"
-            className="resize-none border-0 p-1 shadow-none focus-visible:ring-0"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                void send();
-              }
-            }}
+            access={access}
+            onAccess={setAccess}
+            model={model}
+            onModel={setPicked}
+            extra={
+              <Select
+                value={state.workspace.root}
+                onValueChange={(root) => {
+                  if (root !== OPEN_OTHER) return void pickProject(root);
+                  void chooseProjectDirectory()
+                    .then((picked) => picked && pickProject(picked))
+                    .catch((e: Error) => toast.error(e.message));
+                }}
+              >
+                <SelectTrigger size="sm" className="h-7 max-w-44 gap-1 rounded-full border-0 px-2 text-xs shadow-none hover:bg-muted dark:bg-transparent" aria-label="在哪个项目里">
+                  <FolderOpen className="text-muted-foreground" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {state.projects.map((p) => (
+                    <SelectItem key={p.root} value={p.root} title={p.root}>
+                      {p.name}
+                      {p.demo && <span className="text-xs text-muted-foreground">演示</span>}
+                    </SelectItem>
+                  ))}
+                  <SelectSeparator />
+                  <SelectItem value={OPEN_OTHER}>打开其他项目…</SelectItem>
+                </SelectContent>
+              </Select>
+            }
+            footerLeft={<span className="truncate">{ACCESS.find((a) => a.value === access)?.hint}。Enter 发送，Shift + Enter 换行</span>}
+            cost={chatCost(undefined, model)}
+            context={chatContext(model, findModel(routes, model)?.option)}
           />
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Select
-              value={state.workspace.root}
-              onValueChange={(root) => {
-                if (root !== OPEN_OTHER) return void pickProject(root);
-                void chooseProjectDirectory()
-                  .then((picked) => picked && pickProject(picked))
-                  .catch((e: Error) => toast.error(e.message));
-              }}
-            >
-              <SelectTrigger size="sm" className="max-w-48" aria-label="在哪个项目里">
-                <FolderOpen className="text-muted-foreground" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {state.projects.map((p) => (
-                  <SelectItem key={p.root} value={p.root} title={p.root}>
-                    {p.name}
-                    {p.demo && <span className="text-xs text-muted-foreground">演示</span>}
-                  </SelectItem>
-                ))}
-                <SelectSeparator />
-                <SelectItem value={OPEN_OTHER}>打开其他项目…</SelectItem>
-              </SelectContent>
-            </Select>
-            <ModelPicker value={model} onChange={setPicked} className="max-w-72 min-w-44" />
-            <AccessSwitch value={access} onChange={setAccess} />
-            <Button size="icon" className="ml-auto" disabled={!text.trim() || !model || sending} onClick={() => void send()} aria-label="发送">
-              {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-            </Button>
-          </div>
         </div>
-        <p className="mt-2 px-1 text-xs text-muted-foreground">
-          {ACCESS.find((a) => a.value === access)?.hint}。Enter 发送，Shift + Enter 换行。
-        </p>
 
         {noModel && (
           <div className="mt-6 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm">

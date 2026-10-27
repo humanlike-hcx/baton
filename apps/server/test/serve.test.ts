@@ -1,7 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { Thread, TimelineItem } from "@baton/core";
 import { describe, expect, it } from "vitest";
+import { createApp } from "../src/app.ts";
 import { startServer } from "../src/serve.ts";
-import { testServer } from "./helpers.ts";
+import { WEB_DIST } from "../src/state.ts";
+import { HOST, testServer } from "./helpers.ts";
 
 type Approval = Extract<TimelineItem, { kind: "approval" }>;
 const pendingApproval = (t: Thread) => t.items.find((i): i is Approval => i.kind === "approval" && i.status === "pending");
@@ -36,5 +40,23 @@ describe("the service the web version and the desktop app share (US-86, US-87)",
     expect(t.status).toBe("idle");
     expect(t.items.find((i) => i.kind === "approval" && i.approvalId === approvalId)).toMatchObject({ status: "denied" });
     expect(t.items.some((i) => i.kind === "notice" && i.text.includes("上一次回复被中断"))).toBe(false);
+  });
+});
+
+describe("the web app in production mode (US-84)", () => {
+  it.skipIf(!fs.existsSync(path.join(WEB_DIST, "index.html")))("never lets the browser keep an index.html that names a previous build's bundle", async () => {
+    const s = await testServer();
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    const app = createApp(s.state);
+    process.env.NODE_ENV = previous;
+    const page = await app.request("/", { headers: { host: HOST } });
+    expect(page.status).toBe(200);
+    expect(page.headers.get("cache-control")).toBe("no-cache");
+    const bundle = /assets\/[^"]+\.js/.exec(await page.text())![0];
+    const asset = await app.request(`/${bundle}`, { headers: { host: HOST } });
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get("cache-control")).toBeNull();
+    expect((await app.request("/threads/x", { headers: { host: HOST } })).headers.get("cache-control")).toBe("no-cache");
   });
 });

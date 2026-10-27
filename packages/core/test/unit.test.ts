@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { runChecks } from "../src/checks.ts";
 import { compileBriefing } from "../src/context.ts";
 import { RULE_FILES, defaultSettings } from "../src/defaults.ts";
-import { modelFamily, validateModelRoute } from "../src/families.ts";
+import { cursorVariant, modelFamily, thinkingLabel, validateModelRoute } from "../src/families.ts";
 import { listLessons, listMemory, recordLesson, remember } from "../src/memory.ts";
 import { applyChunks, parsePatch } from "../src/patch.ts";
 import { REVIEW_PERMISSIONS, PermissionError, accessPermissions, resolveWorkspacePath, shellPolicy } from "../src/permissions.ts";
@@ -53,6 +53,21 @@ describe("model families", () => {
     expect(validateModelRoute("cursor", "gpt-5.6-sol")).toBeDefined();
     expect(validateModelRoute("cursor", "auto")).toBeDefined();
     expect(validateModelRoute("openrouter", "x")).toMatch(/不支持/);
+  });
+});
+
+describe("Cursor model variants (US-100)", () => {
+  it("splits effort, thinking and fast off the id in either order, and the matching words off the name", () => {
+    expect(cursorVariant("claude-opus-5-thinking-high-fast", "Claude Opus 5 1M Thinking Fast")).toEqual({ base: "claude-opus-5", baseName: "Claude Opus 5 1M", effort: "high", reasoning: true, fast: true });
+    expect(cursorVariant("claude-4.6-opus-high-thinking", "Claude Opus 4.6 1M Thinking")).toMatchObject({ base: "claude-4.6-opus", effort: "high", reasoning: true, fast: false });
+    expect(cursorVariant("claude-opus-5-5-xhigh-fast", "Claude Opus 5.5 1M Extra High Fast")).toMatchObject({ base: "claude-opus-5-5", baseName: "Claude Opus 5.5 1M", effort: "xhigh", fast: true });
+    expect(cursorVariant("grok-4.7-low-fast", "Grok 4.7  Low Fast\u200b\u200b")).toMatchObject({ base: "grok-4.7", baseName: "Grok 4.7", effort: "low" });
+    expect(cursorVariant("claude-fable-5-thinking-max", "Claude Fable 5 1M Max Thinking (NO ZDR)")).toMatchObject({ base: "claude-fable-5", baseName: "Claude Fable 5 1M (NO ZDR)", effort: "max", reasoning: true });
+    expect(cursorVariant("claude-haiku-5-5-low", "Claude Haiku 5.5  Low No Thinking")).toMatchObject({ base: "claude-haiku-5-5", baseName: "Claude Haiku 5.5", effort: "low", reasoning: false });
+    expect(cursorVariant("composer-2.5-fast", "Composer 2.5 Fast")).toEqual({ base: "composer-2.5", baseName: "Composer 2.5", reasoning: false, fast: true });
+    expect(cursorVariant("gemini-3.1-pro", "Gemini 3.1 Pro")).toEqual({ base: "gemini-3.1-pro", baseName: "Gemini 3.1 Pro", reasoning: false, fast: false });
+    expect(thinkingLabel("xhigh")).toBe("极高");
+    expect(thinkingLabel(undefined)).toBe("默认");
   });
 });
 
