@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "tsx watch --clear-screen=false --ignore '**/.baton/**' src/main.ts",
-    "start": "NODE_ENV=production tsx src/main.ts",
+    "start": "tsx src/start.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {

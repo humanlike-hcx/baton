@@ -7,12 +7,20 @@
     "node": ">=22.19"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @baton/server --filter @baton/web dev",
+    "dev": "node scripts/dev.mjs",
     "build": "pnpm --filter @baton/web build",
     "start": "pnpm --filter @baton/server start",
     "desktop": "pnpm build && pnpm --filter @baton/desktop build",
     "test": "vitest run",
-    "typecheck": "pnpm -r --no-bail typecheck"
+    "typecheck": "pnpm -r --no-bail typecheck",
+    "smoke:start": "node scripts/smoke-start.mjs",
+    "smoke:dev": "node scripts/smoke-start.mjs dev"
+  },
+  "pnpm": {
+    "overrides": {
+      "undici@8.10.2": "8.12.2",
+      "katex@<0.18.2": "0.19.1"
+    }
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

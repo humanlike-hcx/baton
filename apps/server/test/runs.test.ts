@@ -132,7 +132,7 @@ describe("HTTP API: approvals (US-59)", () => {
 
     const t = await s.waitForThread(a.id, (x) => x.items.some((i) => i.kind === "approval" && i.risk === "exec" && i.status === "expired"), "both approvals to expire");
     expect(t.items.find((i) => i.kind === "approval" && i.approvalId === write.approvalId)).toMatchObject({ status: "expired" });
-    expect(t.items.find((i) => i.kind === "approval" && i.risk === "exec")).toMatchObject({ preview: "wc -l notes/a.md" });
+    expect(t.items.find((i) => i.kind === "approval" && i.risk === "exec")).toMatchObject({ preview: "node --version" });
     const done = await s.settled(a.id);
     expect(done.items.find((i) => i.kind === "tool" && i.tool === "shell")).toMatchObject({ status: "denied" });
     expect(fs.existsSync(path.join(s.root, "notes/a.md"))).toBe(false);

@@ -6,7 +6,11 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -20,3 +24,8 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm build
+      - run: pnpm smoke:start
+      - run: pnpm smoke:dev
+      - run: pnpm audit --prod --audit-level high
+        if: matrix.os == 'ubuntu-latest'

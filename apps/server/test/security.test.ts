@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { MemoryEntry, Thread, TimelineItem } from "@baton/core";
 import { describe, expect, it } from "vitest";
-import { CURSOR_COMPOSER, testServer } from "./helpers.ts";
+import { CURSOR_COMPOSER, isPrivateFile, testServer } from "./helpers.ts";
 
 type Approval = Extract<TimelineItem, { kind: "approval" }>;
 type Server = Awaited<ReturnType<typeof testServer>>;
@@ -110,7 +110,7 @@ describe("HTTP API: credentials stay on this machine (US-62)", () => {
       { mode: 0o600 },
     );
     await s.post("/api/auth/deepseek", { key: secrets.key });
-    expect(fs.statSync(path.join(s.home, "credentials.json")).mode & 0o777).toBe(0o600);
+    expect(isPrivateFile(path.join(s.home, "credentials.json"))).toBe(true);
     const chat = await s.settled((await s.chat("写文件：notes/run.md", { access: "allow" })).id);
     await s.post(`/api/threads/${chat.id}/review`, { source: "demo", model: "demo-review" });
     await s.waitForThread(chat.id, (t) => t.runs.length === 2 && t.status !== "running", "review");

@@ -22,6 +22,51 @@ export interface ShellResult {
   durationMs: number;
 }
 
+function powershellCommand(command: string): { file: string; args: string[] } {
+  const encodedCommand = Buffer.from(command, "utf8").toString("base64");
+  const script = `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
+$commandText = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${encodedCommand}'))
+$global:LASTEXITCODE = 0
+try {
+  Invoke-Expression $commandText
+} catch [System.Management.Automation.CommandNotFoundException] {
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 127
+} catch {
+  [Console]::Error.WriteLine($_.Exception.Message)
+  exit 1
+}
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+exit 0
+`.trim();
+  return {
+    file: "powershell.exe",
+    args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+  };
+}
+
+function shellCommand(command: string): { file: string; args: string[] } {
+  return process.platform === "win32" ? powershellCommand(command) : { file: "bash", args: ["-c", command] };
+}
+
+function killShell(child: ReturnType<typeof spawn>): void {
+  if (!child.pid) return;
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    killer.on("error", () => child.kill());
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
 export function runShell(
   command: string,
   options: { cwd: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal; env?: NodeJS.ProcessEnv },
@@ -29,11 +74,13 @@ export function runShell(
   const started = Date.now();
   const maxBytes = options.maxBytes ?? 16 * 1024;
   return new Promise((resolve) => {
-    const child = spawn("bash", ["-c", command], {
+    const shell = shellCommand(command);
+    const child = spawn(shell.file, shell.args, {
       cwd: options.cwd,
       env: options.env ?? scrubbedEnv(),
       stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
+      detached: process.platform !== "win32",
+      windowsHide: true,
     });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
@@ -49,13 +96,7 @@ export function runShell(
       errBytes += d.length;
     });
     let timedOut = false;
-    const kill = () => {
-      try {
-        if (child.pid) process.kill(-child.pid, "SIGKILL");
-      } catch {
-        child.kill("SIGKILL");
-      }
-    };
+    const kill = () => killShell(child);
     const timer = setTimeout(() => {
       timedOut = true;
       kill();

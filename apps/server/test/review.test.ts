@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { RunRecord, Thread, TimelineItem } from "@baton/core";
 import { describe, expect, it } from "vitest";
-import { CURSOR_SONNET, DEMO_CHAT, DEMO_REVIEW, testServer } from "./helpers.ts";
+import { CURSOR_SONNET, DEMO_CHAT, DEMO_REVIEW, NO_TODO_CHECK, testServer } from "./helpers.ts";
 
 type Server = Awaited<ReturnType<typeof testServer>>;
 type ReviewItem = Extract<TimelineItem, { kind: "review" }>;
@@ -51,7 +51,7 @@ describe("「让另一个模型检查」(US-94, US-66, US-67)", () => {
   });
 
   it("fails on a problem in the diff, and never passes over a failed check", async () => {
-    const s = await testServer({ settings: (st) => (st.checks = [{ name: "没有 TODO", command: "! grep -rq TODO notes", timeoutSec: 30 }]) });
+    const s = await testServer({ settings: (st) => (st.checks = [{ name: "没有 TODO", command: NO_TODO_CHECK, timeoutSec: 30 }]) });
     const todo = await changedChat(s, "写文件：notes/todo.md TODO 以后补");
     const failed = await review(s, todo.id);
     expect(failed.run.checks?.[0]).toMatchObject({ name: "没有 TODO", status: "fail" });

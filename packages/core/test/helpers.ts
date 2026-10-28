@@ -12,6 +12,11 @@ export function tempDir(prefix = "baton-test-"): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+/** Windows junctions cover the directory-link behavior without requiring symlink privileges. */
+export function createDirectoryLink(target: string, link: string): void {
+  fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+}
+
 export function memoryCredentials(): CredentialStore {
   const mem = new Map<string, any>();
   return {

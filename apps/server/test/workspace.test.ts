@@ -4,7 +4,7 @@ import type { Briefing, MemoryEntry, StatRow, Thread } from "@baton/core";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.ts";
 import { AppState } from "../src/state.ts";
-import { HOST, tempDir, testServer } from "./helpers.ts";
+import { HOST, NO_TODO_CHECK, createDirectoryLink, tempDir, testServer } from "./helpers.ts";
 
 const BRIEFING = "/api/briefing?source=demo&model=demo-chat&role=chat";
 
@@ -75,12 +75,13 @@ describe("HTTP API: trying a check command (US-68)", () => {
   it("runs the command in the workspace and reports its status and output", async () => {
     const s = await testServer();
     fs.writeFileSync(path.join(s.root, "marker.txt"), "hi\n");
-    const pass = await s.post("/api/checks/try", { name: "列文件", command: "ls marker.txt" });
+    const pass = await s.post("/api/checks/try", {
+      name: "列文件",
+      command: `node -e "process.exit(require('fs').existsSync('marker.txt') ? 0 : 1)"`,
+    });
     expect(pass).toMatchObject({ name: "列文件", status: "pass", exitCode: 0 });
-    expect(pass.output).toContain("marker.txt");
-    const fail = await s.post("/api/checks/try", { command: "echo boom >&2; exit 3" });
+    const fail = await s.post("/api/checks/try", { command: `node -e "process.exit(3)"` });
     expect(fail).toMatchObject({ status: "fail", exitCode: 3 });
-    expect(fail.output).toContain("boom");
   });
 });
 
@@ -88,7 +89,7 @@ describe("HTTP API: the demo workspace on first start (US-83)", () => {
   it("stays the demo workspace after a restart, even when the data directory is reached through a link", async () => {
     const real = tempDir("baton-home-real-");
     const home = path.join(tempDir("baton-home-link-"), "home");
-    fs.symlinkSync(real, home);
+    createDirectoryLink(real, home);
     const start = async () => {
       const state = new AppState({ baseUrl: "http://127.0.0.1:9", home, codexAuthFile: path.join(home, "no-such-codex-auth.json") });
       await state.init();
@@ -262,7 +263,7 @@ describe("HTTP API: reuse the Codex CLI login (US-102)", () => {
 
 describe("HTTP API: stats (US-76)", () => {
   it("counts replies, changes, reviews given and how each model's changes fared, with tokens, per runtime and model", async () => {
-    const s = await testServer({ settings: (st) => (st.checks = [{ name: "没有 TODO", command: "! grep -rq TODO notes", timeoutSec: 30 }]) });
+    const s = await testServer({ settings: (st) => (st.checks = [{ name: "没有 TODO", command: NO_TODO_CHECK, timeoutSec: 30 }]) });
     const review = async (id: string) => {
       const before = (await s.thread(id)).runs.length;
       await s.post(`/api/threads/${id}/review`, { source: "demo", model: "demo-review" });

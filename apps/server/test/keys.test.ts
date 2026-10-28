@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import type { Thread } from "@baton/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { testServer } from "./helpers.ts";
+import { isPrivateFile, testServer } from "./helpers.ts";
 
 interface Route {
   source: string;
@@ -77,7 +77,7 @@ describe("HTTP API: any API key, assembled automatically (US-101)", () => {
     await s.get("/api/state");
     expect([...s.responses, ...s.events.map((e) => JSON.stringify(e))].join("\n")).not.toContain(key);
     const file = path.join(s.home, "credentials.json");
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(isPrivateFile(file)).toBe(true);
     expect(fs.readFileSync(path.join(s.home, "keys.json"), "utf8")).not.toContain(key);
 
     await s.request("DELETE", `/api/keys/${(added as { id: string }).id}`);

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import type { Thread, WorkspaceSettings } from "@baton/core";
 import { createApp } from "../src/app.ts";
 import { AppState, MOCK_CURSOR, nodeScriptCommand } from "../src/state.ts";
@@ -21,6 +22,22 @@ export const CURSOR_SONNET: ModelRef = { source: "cursor", model: "claude-sonnet
 export function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
+
+/** Windows junctions cover the directory-link behavior without requiring symlink privileges. */
+export function createDirectoryLink(target: string, link: string): void {
+  fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+}
+
+/** POSIX credentials are 0600; Windows credentials must have no inherited ACL entries. */
+export function isPrivateFile(file: string): boolean {
+  if (process.platform !== "win32") return (fs.statSync(file).mode & 0o777) === 0o600;
+  const acl = execFileSync("icacls.exe", [file], { encoding: "utf8", windowsHide: true });
+  return acl.toLowerCase().includes(os.userInfo().username.toLowerCase()) && !acl.includes("(I)");
+}
+
+/** Recursively reject TODO in notes, using a command that works in both sh and PowerShell. */
+export const NO_TODO_CHECK =
+  `node -e "const fs=require('fs'),p=require('path');const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(p.join(d,e.name)):[p.join(d,e.name)]);process.exit(walk('notes').some(f=>fs.readFileSync(f,'utf8').includes('TODO'))?1:0)"`;
 
 export interface ApiResponse<T> {
   status: number;

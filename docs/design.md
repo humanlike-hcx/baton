@@ -154,7 +154,7 @@ AGENTS.md                 # 公共规则，Pi 和 Cursor 都会读；由工作�
 - Pi：作为自定义工具注入，不加载 Pi 的默认资源发现。
 - Cursor：本地 MCP 服务 `baton-mcp`，只暴露 4 个工具：`read_context`、`memory_search`、`remember`、`submit_review`。另有同等功能的 `baton` 命令行（`baton review pass|fail --issues …`）。
 
-shell 工具：单独返回退出码；截断时保留开头和结尾，只砍中间，保留 stderr；每个工具有输出上限；时间线显示每次调用占用的 token 估算。
+shell 工具：macOS / Linux 使用 `bash -c`，Windows 使用隐藏窗口的 Windows PowerShell；单独返回退出码；截断时保留开头和结尾，只砍中间，保留 stderr；每个工具有输出上限；时间线显示每次调用占用的 token 估算。
 
 ## 9. 权限
 
@@ -180,6 +180,8 @@ packages/core   harness：工作区存储、规则拼装、记忆、路线规则
 packages/mcp    baton-mcp（stdio）与 baton 命令行，回调本地服务
 apps/desktop    Electron 外壳：在主进程里启动同一个服务，窗口加载它提供的同一套界面
 ```
+
+消息渲染（US-103）：`apps/web/src/components/rich-text.tsx` 用 `react-markdown`、`remark-gfm`、`remark-math` 和 `rehype-katex` 渲染 GFM 与 TeX；不启用原始 HTML，代码块保持源码，KaTeX 样式从 `katex` 包引入。
 
 执行器：
 

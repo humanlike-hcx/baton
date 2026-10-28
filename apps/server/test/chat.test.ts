@@ -161,7 +161,7 @@ describe("chats: one access switch per chat (US-93, US-19)", () => {
     expect(approval.preview).toMatch(/^新建 notes\/chat\.md\n\+# 对话里写的文件/);
     await s.post(`/api/approvals/${approval.approvalId}`, { allow: true });
     const command = await s.waitForThread(t.id, (x) => pendingApproval(x)?.risk === "exec", "command approval");
-    expect(pendingApproval(command)!.preview).toBe("wc -l notes/chat.md");
+    expect(pendingApproval(command)!.preview).toBe("node --version");
     await s.post(`/api/approvals/${pendingApproval(command)!.approvalId}`, { allow: false });
     t = await s.settled(t.id);
     const run = t.runs[1]!;
@@ -252,7 +252,7 @@ describe("chats: live replies, tool calls and approvals (US-21)", () => {
     blocked = await s.waitForThread(created.id, (t) => pendingApproval(t)?.risk === "exec", "command approval");
 
     const updates = () => s.events.filter((e) => e.type === "thread" && (e.thread as Thread).id === created.id).map((e) => e.thread as Thread);
-    expect(updates().some((t) => t.items.some((i) => i.kind === "approval" && i.status === "pending" && i.preview === "wc -l notes/live.md"))).toBe(true);
+    expect(updates().some((t) => t.items.some((i) => i.kind === "approval" && i.status === "pending" && i.preview === "node --version"))).toBe(true);
     expect(updates().some((t) => tools(t, "write_file").some((i) => i.status === "ok"))).toBe(true);
 
     await s.post(`/api/approvals/${pendingApproval(blocked)!.approvalId}`, { allow: false });

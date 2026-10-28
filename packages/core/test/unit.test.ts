@@ -15,7 +15,7 @@ import { runAgent } from "../src/orchestrator.ts";
 import type { RunAgent, Thread } from "../src/types.ts";
 import { truncateMiddle } from "../src/util.ts";
 import { Workspace } from "../src/workspace.ts";
-import { tempDir } from "./helpers.ts";
+import { createDirectoryLink, tempDir } from "./helpers.ts";
 
 function agent(partial: Partial<RunAgent> & Pick<RunAgent, "id" | "model">): RunAgent {
   return {
@@ -93,9 +93,10 @@ describe("Cursor model variants (US-100)", () => {
 
 describe("permissions", () => {
   const root = fs.realpathSync(tempDir());
+  const outside = fs.realpathSync(tempDir());
   fs.mkdirSync(path.join(root, "src"));
   fs.writeFileSync(path.join(root, ".env"), "SECRET=1");
-  fs.symlinkSync("/etc", path.join(root, "escape"));
+  createDirectoryLink(outside, path.join(root, "escape"));
   const settings = defaultSettings("t");
 
   it("allows paths inside the workspace", () => {
@@ -172,7 +173,12 @@ describe("apply_patch", () => {
 
 describe("shell", () => {
   it("returns the exit code separately, keeps stderr and truncates the middle", async () => {
-    const r = await runShell("echo start; seq 1 20000; echo oops >&2; exit 3", { cwd: tempDir(), maxBytes: 2000 });
+    const cwd = tempDir();
+    fs.writeFileSync(
+      path.join(cwd, "truncate.js"),
+      `console.log("start"); for (let i = 1; i <= 20000; i++) console.log(i); console.error("oops"); process.exit(3);\n`,
+    );
+    const r = await runShell('node "truncate.js"', { cwd, maxBytes: 2000 });
     expect(r.exitCode).toBe(3);
     expect(r.stderr).toContain("oops");
     expect(r.truncated).toBe(true);
@@ -181,8 +187,10 @@ describe("shell", () => {
     expect(r.stdout).toContain("省略中间");
   });
   it("does not leak secrets into the environment", async () => {
+    const cwd = tempDir();
+    fs.writeFileSync(path.join(cwd, "env.js"), `process.stdout.write(Object.keys(process.env).sort().join("\\n"));\n`);
     process.env.TEST_API_KEY = "sk-secret";
-    const r = await runShell("env", { cwd: tempDir() });
+    const r = await runShell('node "env.js"', { cwd });
     expect(r.stdout).not.toContain("sk-secret");
     delete process.env.TEST_API_KEY;
   });
@@ -198,11 +206,11 @@ describe("checks", () => {
   it("distinguishes pass, fail, skipped and error, and every check can go red", async () => {
     const results = await runChecks(
       [
-        { name: "ok", command: "true" },
-        { name: "bad", command: "false" },
+        { name: "ok", command: `node -e "process.exit(0)"` },
+        { name: "bad", command: `node -e "process.exit(1)"` },
         { name: "skip", command: "# disabled" },
         { name: "missing", command: "no-such-command-xyz" },
-        { name: "scoped", command: "true", paths: ["src/**"] } as never,
+        { name: "scoped", command: `node -e "process.exit(0)"`, paths: ["src/**"] } as never,
       ],
       { cwd: tempDir(), changedFiles: ["docs/readme.md"] },
     );

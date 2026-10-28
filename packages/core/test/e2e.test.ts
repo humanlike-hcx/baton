@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 import { listMemory } from "../src/memory.ts";
 import { DEMO_CHAT, DEMO_REVIEW, demoSetup, waitFor, waitForSettled } from "./helpers.ts";
 
+const NO_TODO_CHECK =
+  `node -e "const fs=require('fs'),p=require('path');const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(p.join(d,e.name)):[p.join(d,e.name)]);process.exit(walk('notes').some(f=>fs.readFileSync(f,'utf8').includes('TODO'))?1:0)"`;
+
 describe("demo chat end to end", () => {
   it("chats read-only, changes a file once access is opened, and another model reviews it", async () => {
     const { orch, root, ws } = demoSetup();
@@ -43,7 +46,7 @@ describe("demo chat end to end", () => {
     const { orch } = demoSetup({
       mutate: (ws) => {
         const s = ws.settings();
-        s.checks = [{ name: "没有 TODO", command: "! grep -rq TODO notes", timeoutSec: 30 }];
+        s.checks = [{ name: "没有 TODO", command: NO_TODO_CHECK, timeoutSec: 30 }];
         ws.saveSettings(s);
       },
     });
@@ -64,7 +67,7 @@ describe("demo chat end to end", () => {
     const { orch } = demoSetup({
       mutate: (ws) => {
         const s = ws.settings();
-        s.checks = [{ name: "总是失败", command: "false", timeoutSec: 30 }];
+        s.checks = [{ name: "总是失败", command: `node -e "process.exit(1)"`, timeoutSec: 30 }];
         ws.saveSettings(s);
       },
     });
@@ -96,7 +99,7 @@ describe("demo chat end to end", () => {
     await waitFor(() => orch.getThread(thread.id)!.items.some((i) => i.kind === "approval" && i.status === "pending"), 20_000, "command approval");
     const command = orch.getThread(thread.id)!.items.find((i) => i.kind === "approval" && i.status === "pending");
     if (command?.kind !== "approval") throw new Error("no command approval");
-    expect(command.preview).toBe("wc -l notes/a.md");
+    expect(command.preview).toBe("node --version");
     orch.respondApproval(command.approvalId, false);
     let t = await waitForSettled(orch, thread.id);
     expect(fs.existsSync(path.join(root, "notes/a.md"))).toBe(false);

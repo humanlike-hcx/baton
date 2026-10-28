@@ -39,6 +39,7 @@ pnpm dev
 
 - 网页：Vite 开发服务器，`127.0.0.1:47320`
 - 本地 API + WebSocket：`127.0.0.1:47321`（只监听本机，校验 Host / Origin，写操作需要 `X-Baton` 请求头）
+- 命令执行：macOS / Linux 使用 `bash`，Windows 使用 PowerShell；检查命令按当前平台的语法填写。
 
 第一次启动会自动打开演示工作区 `~/.baton/demo-workspace`，里面有离线的演示模型（「对话」「检查」），不用登录任何账号就能试：把权限切到「允许直接改」，发「写文件：notes/todo.md TODO 补测试」，再点「让另一个模型检查」，会看到检查命令先跑、留着 TODO 的改动被判不通过。
 

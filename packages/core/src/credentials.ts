@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,20 @@ import { readJson, writeFileAtomic } from "./util.ts";
 
 export function batonHome(): string {
   return process.env.BATON_HOME ?? path.join(os.homedir(), ".baton");
+}
+
+/** Keep a local data file private even on Windows, where chmod does not change the ACL. */
+function restrictFile(file: string): void {
+  if (process.platform !== "win32") {
+    fs.chmodSync(file, 0o600);
+    return;
+  }
+  const user = os.userInfo().username;
+  const principal = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${user}` : user;
+  const result = spawnSync("icacls.exe", [file, "/inheritance:r", "/grant:r", `${principal}:(F)`], { encoding: "utf8", windowsHide: true });
+  if (result.status !== 0) {
+    throw new Error(`无法限制凭据文件权限：${(result.stderr || result.stdout || "icacls 失败").trim()}`);
+  }
 }
 
 /**
@@ -20,6 +35,7 @@ export class FileCredentialStore implements CredentialStore {
 
   constructor(home = batonHome()) {
     this.file = path.join(home, "credentials.json");
+    if (fs.existsSync(this.file)) restrictFile(this.file);
   }
 
   private load(): Record<string, Credential> {
@@ -28,7 +44,7 @@ export class FileCredentialStore implements CredentialStore {
 
   private save(data: Record<string, Credential>): void {
     writeFileAtomic(this.file, `${JSON.stringify(data, null, 2)}\n`, 0o600);
-    fs.chmodSync(this.file, 0o600);
+    restrictFile(this.file);
   }
 
   private serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -154,6 +170,7 @@ export function writeCodexRefresh(file: string, previousRefresh: string, next: {
   if (next.accountId) current.account_id = next.accountId;
   doc.last_refresh = new Date().toISOString();
   writeFileAtomic(file, `${JSON.stringify(doc, null, 2)}\n`, 0o600);
+  restrictFile(file);
 }
 
 /** Stable per-installation UUID; Sign in with ChatGPT requires one. */
@@ -163,5 +180,6 @@ export function deviceId(home = batonHome()): string {
   if (saved.id) return saved.id;
   const id = randomUUID();
   writeFileAtomic(file, `${JSON.stringify({ id }, null, 2)}\n`, 0o600);
+  restrictFile(file);
   return id;
 }

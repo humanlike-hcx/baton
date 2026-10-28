@@ -104,7 +104,7 @@ function demoChat(prompt: string, briefing: string): FauxResponseStep[] {
   if (target) {
     return [
       fauxAssistantMessage([fauxText(`试着写 ${target}。`), fauxToolCall("write_file", { path: target, content: `# 对话里写的文件\n\n${prompt.trim()}\n` })], toolUse),
-      fauxAssistantMessage([fauxToolCall("shell", { command: `wc -l ${target}` })], toolUse),
+      fauxAssistantMessage([fauxToolCall("shell", { command: "node --version" })], toolUse),
       fauxAssistantMessage(`${reply}\n\n写文件的结果见上面的工具调用。`),
     ];
   }

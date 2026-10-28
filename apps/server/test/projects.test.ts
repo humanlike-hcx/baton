@@ -61,7 +61,7 @@ describe("HTTP API: one chat, one project (US-96)", () => {
     expect(state.projects[0]!.threads).toEqual([]);
     expect(await s.get("/api/threads")).toEqual([]);
 
-    // The demo chat asks twice (the write, then `wc -l`); both are answered while the other project is current.
+    // The demo chat asks twice (the write, then `node --version`); both are answered while the other project is current.
     for (let answered = 0; answered < 2; ) {
       const approval = pendingApproval(await s.waitForThread(a.id, (t) => Boolean(pendingApproval(t)), "approval"));
       if (approval?.kind !== "approval") continue;

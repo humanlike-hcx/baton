@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { allowWebSocket } from "../src/app.ts";
-import { testServer } from "./helpers.ts";
+import { isPrivateFile, testServer } from "./helpers.ts";
 
 describe("HTTP API: local-only access", () => {
   it("refuses requests whose Host is not local", async () => {
@@ -60,7 +60,7 @@ describe("HTTP API: credentials", () => {
 
     const file = path.join(s.home, "credentials.json");
     expect(fs.readFileSync(file, "utf8")).toContain(key);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(isPrivateFile(file)).toBe(true);
 
     await s.request("DELETE", "/api/auth/deepseek");
     expect((await s.get("/api/state")).auth.keys).toEqual([]);
@@ -74,5 +74,12 @@ describe("HTTP API: credentials", () => {
     expect(state.auth.chatgpt.loggedIn).toBe(false);
     const chatgpt = (await s.get<{ routes: { source: string; unavailable?: string }[] }>("/api/models")).routes.find((r) => r.source === "chatgpt")!;
     expect(chatgpt.unavailable).toContain("ChatGPT");
+  });
+
+  it("tightens an existing credentials file when the service starts", async () => {
+    const s = await testServer({
+      prepare: ({ home }) => fs.writeFileSync(path.join(home, "credentials.json"), "{}\n"),
+    });
+    expect(isPrivateFile(path.join(s.home, "credentials.json"))).toBe(true);
   });
 });

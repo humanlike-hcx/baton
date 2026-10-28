@@ -1,76 +1,32 @@
-import { Fragment, type ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { cn } from "@/lib/utils";
 
-function inline(text: string): ReactNode[] {
-  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
-      return (
-        <code key={i} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) return <strong key={i}>{part.slice(2, -2)}</strong>;
-    return <Fragment key={i}>{part}</Fragment>;
-  });
-}
-
-type Block = { kind: "line"; text: string } | { kind: "code"; text: string };
-
-/** Splits out fenced code blocks; an unclosed fence (still streaming) runs to the end. */
-function blocks(text: string): Block[] {
-  const out: Block[] = [];
-  let code: string[] | undefined;
-  for (const line of text.split("\n")) {
-    if (/^\s*```/.test(line)) {
-      if (code) {
-        out.push({ kind: "code", text: code.join("\n") });
-        code = undefined;
-      } else code = [];
-    } else if (code) code.push(line);
-    else out.push({ kind: "line", text: line });
-  }
-  if (code) out.push({ kind: "code", text: code.join("\n") });
-  return out;
-}
-
-/** Small Markdown subset: headings, bullets, bold, inline code, fenced code, line breaks. */
+/** GitHub Markdown with TeX math. Raw HTML stays disabled, so model output cannot inject markup. */
 export function RichText({ text, className }: { text: string; className?: string }) {
   return (
-    <div className={cn("space-y-1 text-sm leading-relaxed break-words", className)}>
-      {blocks(text).map((block, i) => {
-        if (block.kind === "code") {
-          return (
-            <pre key={i} className="overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre">
-              {block.text}
-            </pre>
-          );
-        }
-        const line = block.text;
-        const heading = /^(#{1,4})\s+(.*)$/.exec(line);
-        if (heading) return <div key={i} className="pt-1 font-semibold">{inline(heading[2]!)}</div>;
-        const bullet = /^(\s*)[-*]\s+(.*)$/.exec(line);
-        if (bullet) {
-          return (
-            <div key={i} className="flex gap-2" style={{ paddingLeft: `${bullet[1]!.length * 6}px` }}>
-              <span className="text-muted-foreground">•</span>
-              <span className="min-w-0">{inline(bullet[2]!)}</span>
-            </div>
-          );
-        }
-        const numbered = /^(\d+)\.\s+(.*)$/.exec(line);
-        if (numbered) {
-          return (
-            <div key={i} className="flex gap-2">
-              <span className="text-muted-foreground tabular-nums">{numbered[1]}.</span>
-              <span className="min-w-0">{inline(numbered[2]!)}</span>
-            </div>
-          );
-        }
-        if (!line.trim()) return <div key={i} className="h-1" />;
-        return <div key={i}>{inline(line)}</div>;
-      })}
+    <div className={cn("markdown-body text-sm leading-relaxed break-words", className)}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
+        rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: "ignore" }]]}
+        components={{
+          a({ node: _node, ...props }) {
+            return <a {...props} target="_blank" rel="noreferrer noopener" />;
+          },
+          table({ node: _node, ...props }) {
+            return (
+              <div className="markdown-table">
+                <table {...props} />
+              </div>
+            );
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }
