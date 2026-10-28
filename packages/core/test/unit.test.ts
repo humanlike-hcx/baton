@@ -176,7 +176,8 @@ describe("shell", () => {
     const cwd = tempDir();
     fs.writeFileSync(
       path.join(cwd, "truncate.js"),
-      `console.log("start"); for (let i = 1; i <= 20000; i++) console.log(i); console.error("oops"); process.exit(3);\n`,
+      // process.exit() skips the stdout flush, so Linux can drop the tail this test requires.
+      `console.log("start"); for (let i = 1; i <= 20000; i++) console.log(i); console.error("oops"); process.exitCode = 3;\n`,
     );
     const r = await runShell('node "truncate.js"', { cwd, maxBytes: 2000 });
     expect(r.exitCode).toBe(3);
