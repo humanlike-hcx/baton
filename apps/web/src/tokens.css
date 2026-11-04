@@ -11,6 +11,7 @@
   --color-reasoning: oklch(48% 0.13 300);
   --color-reasoning-paper: oklch(92% 0.025 300);
   --shadow-thumb: 0 1px 5px oklch(18% 0.005 45 / 0.15);
+  --color-composer-focus: oklch(94.5% 0.003 55);
   --color-focus: oklch(40% 0 0);
   --color-accent: var(--color-ink);
   --color-accent-ink: var(--color-paper);

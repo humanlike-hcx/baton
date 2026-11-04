@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUp, Check, ChevronDown, ChevronRight, Folder, FolderPlus, MessageCircle, RotateCcw, Search, ShieldCheck, Square, Zap } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, ChevronRight, Folder, FolderPlus, MessageCircle, RotateCcw, Search, ShieldCheck, Square } from "lucide-react";
 import { Slider } from "radix-ui";
 import type { Access, ModelPick, Project, Thinking } from "@baton/core/types";
 import { useBaton } from "@/lib/store";
@@ -32,15 +32,18 @@ export function ModelMenu({ value, onChange, disabled, onSettings }: { value?: M
   const levels = selected?.thinking ?? [];
   const selectedOption = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (open && panel === "models") selectedOption.current?.focus({ preventScroll: true }); }, [open, panel]);
-  return <ControlMenu label="模型与推理强度" align="end" className={panel === "effort" && selected && thinking ? "effort-menu" : "model-menu"} disabled={disabled} open={open} onOpenChange={next => { setOpen(next); if (next) setPanel(selected && thinking ? "effort" : "models"); else setSearch(""); }} trigger={<><Zap size={15}/><span className="model-name">{selected?.name ?? "选择模型"}</span>{thinking && <span className="model-effort">{thinkingLabels[thinking]}</span>}<ChevronDown size={13}/></>}>
+  return <ControlMenu label="模型与推理强度" align="end" className={panel === "effort" && selected && thinking ? "effort-menu" : "model-menu"} disabled={disabled} open={open} onOpenChange={next => { setOpen(next); if (next) setPanel(selected && thinking ? "effort" : "models"); else setSearch(""); }} trigger={<><span className="model-name">{selected?.name ?? "选择模型"}</span>{thinking && <span className="model-effort">{thinkingLabels[thinking]}</span>}<ChevronDown size={13}/></>}>
     {panel === "effort" && selected && thinking ? <div key="effort" className="picker-panel">
-      <div className="effort-heading"><Zap size={18}/><strong>{thinkingLabels[preview ?? thinking]}</strong><button className="icon" aria-label="恢复默认推理强度" title="恢复默认推理强度" disabled={thinking === levels[0]} onClick={() => change({ id: selected.id, thinking: levels[0] })}><RotateCcw size={17}/></button></div>
+      <div className="effort-heading"><strong>{thinkingLabels[preview ?? thinking]}</strong><button className="icon" aria-label="恢复默认推理强度" title="恢复默认推理强度" disabled={thinking === levels[0]} onClick={() => change({ id: selected.id, thinking: levels[0] })}><RotateCcw size={16}/></button></div>
       <button className="effort-model" onClick={() => setPanel("models")}>{selected.name}<ChevronRight size={14}/></button>
       {levels.length > 1 ? <>
         <Slider.Root className="effort-slider" aria-label="推理强度" min={0} max={levels.length - 1} step={1} value={[Math.max(0, levels.indexOf(preview ?? thinking))]} onValueChange={values => setPreview(levels[values[0]])} onValueCommit={values => change({ id: selected.id, thinking: levels[values[0]] })}>
-          <Slider.Track className="effort-track"><Slider.Range className="effort-range"/></Slider.Track><Slider.Thumb className="effort-thumb" aria-label="推理强度" aria-valuetext={thinkingLabels[preview ?? thinking]}/>
+          <Slider.Track className="effort-track">
+            <Slider.Range className="effort-range"/>
+            <span className="effort-ticks" aria-hidden="true">{levels.map((level, index) => <span key={level} style={{ left: `${index / (levels.length - 1) * 100}%` }}/>)}</span>
+          </Slider.Track>
+          <Slider.Thumb className="effort-thumb" aria-label="推理强度" aria-valuetext={thinkingLabels[preview ?? thinking]}/>
         </Slider.Root>
-        <div className="effort-labels"><span>{thinkingLabels[levels[0]]}</span><span>{thinkingLabels[levels[levels.length - 1]]}</span></div>
       </> : <p className="effort-note">当前模型提供此推理档位</p>}
     </div> : <div key="models" className="picker-panel">
       <div className="model-menu-heading"><span>选择模型</span>{onSettings && <button className="text-button" onClick={() => { setOpen(false); onSettings(); }}>管理</button>}</div>
@@ -76,7 +79,7 @@ export function Composer({ text, onText, onSend, busy, model, onModel, project, 
   const canSend = !!text.trim() && !!model && !busy;
   return <div className={`composer-dock ${tray ? "with-tray" : ""}`}>
     <div className="composer">
-      <textarea aria-label="消息" rows={3} value={text} placeholder={active ? "补充要求，或安排下一步…" : project ? "描述任务，一起开始…" : "提问、讨论，或一起理清一个想法…"} onChange={e => onText(e.target.value)} onKeyDown={e => {
+      <textarea aria-label="消息" rows={2} value={text} placeholder={active ? "补充要求，或安排下一步…" : project ? "描述任务，一起开始…" : "提问、讨论，或一起理清一个想法…"} onChange={e => onText(e.target.value)} onKeyDown={e => {
         if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (canSend) onSend(); }
       }}/>
       <div className="composer-controls">

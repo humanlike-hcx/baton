@@ -395,3 +395,31 @@ button.effort-model { display: flex; margin: 0 auto; background: transparent; co
 .archive-row span { display: block; font-size: var(--text-xs); color: var(--color-muted); margin-top: var(--space-2xs); }
 .archive-row button { flex-shrink: 0; }
 .archive-empty { text-align: center; color: var(--color-muted); padding: var(--space-xl) var(--space-md); }
+
+/* Compact composer: focus changes the whole surface, without outlining the textarea. */
+.draft-content, .composer-inner { max-width: 720px; }
+.draft-content h1 { font-size: 32px; margin-bottom: var(--space-lg); }
+.composer-dock .composer { border-radius: 20px; }
+.composer-dock textarea { min-height: 72px; max-height: 180px; padding: var(--space-md) var(--space-lg) var(--space-xs); border-radius: 20px; font-size: var(--text-body); line-height: 1.6; }
+.composer-dock textarea:focus-visible { outline: none; box-shadow: none; }
+.composer-dock .composer:has(textarea:focus-visible) { background: var(--color-composer-focus); }
+.composer-dock .composer-controls { padding: var(--space-2xs) var(--space-md) var(--space-sm); }
+.composer-tray { margin-top: calc(-1 * var(--space-md)); padding: var(--space-lg) var(--space-sm) var(--space-2xs); min-height: 60px; border-radius: 0 0 18px 18px; }
+@media (min-width: 1600px) { .draft-content, .composer-inner { max-width: 760px; } }
+@media (max-width: 600px) {
+  .draft-content h1 { font-size: 28px; }
+  .composer-dock textarea { padding: var(--space-sm) var(--space-md); }
+  .composer-dock .composer-controls { padding: var(--space-2xs) var(--space-xs) var(--space-xs); }
+}
+
+/* Discrete effort stops share Radix's inset thumb travel, including both endpoints. */
+.control-menu.effort-menu { --effort-thumb-size: 28px; width: 260px; padding: var(--space-sm); border-radius: 18px; }
+.effort-heading { display: grid; grid-template-columns: 28px minmax(0, 1fr) 28px; }
+.effort-heading strong { grid-column: 2; text-align: center; font-size: var(--text-body); }
+.effort-heading button { grid-column: 3; width: 28px; min-height: 28px; }
+button.effort-model { min-height: 26px; }
+.effort-slider { height: 32px; margin-top: var(--space-xs); }
+.effort-track { height: 22px; }
+.effort-thumb { width: var(--effort-thumb-size); height: var(--effort-thumb-size); }
+.effort-ticks { position: absolute; inset: 0 calc(var(--effort-thumb-size) / 2); pointer-events: none; }
+.effort-ticks > span { position: absolute; top: 50%; width: 4px; height: 4px; border-radius: 50%; background: var(--color-paper); transform: translate(-50%, -50%); }
