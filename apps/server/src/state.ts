@@ -1,648 +1,305 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AuthPrompt } from "@earendil-works/pi-ai";
-import {
-  AcpExecutor,
-  CHATGPT_PROVIDERS,
-  ContextTidier,
-  FileCredentialStore,
-  Orchestrator,
-  PiExecutor,
-  Workspace,
-  cursorLogin,
-  cursorModels,
-  cursorStatus,
-  deviceId,
-  readJson,
-  supportsFastTier,
-  validateModelRoute,
-  batonHome,
-  chatgptMethod,
-  defaultCodexAuthFile,
-  importCodexLogin,
-  writeCodexRefresh,
-  writeFileAtomic,
-  DEMO_MODELS,
-  ROUTES,
-  type AuthStatus,
-  type ChatModel,
-  type CredentialSource,
-  type ChatGptMethod,
-  type CursorModel,
-  type CursorStatus,
-  type KeyAccount,
-  type KeyAccountStatus,
-  type OrchestratorEvent,
-  type ThinkingLevel,
-  type TidyModel,
-  detectKeyTemplate,
-  discoverModels,
-  keyTemplate,
-  newId,
-  nowIso,
-} from "@baton/core";
+import { Gateway, Snapshots, atomic, currentResources, discover, enableResource, errorText, hash, id, inside, memories, memoryPath, now, openPi, readJson, safePath,
+  type Access, type AppView, type Item, type McpConfig, type ModelPick, type OpenPi, type PiHooks, type Project, type Resource, type Run, type Thread } from "@baton/core";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { chooseDirectory, type DirectoryPicker } from "./picker.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(here, "../../..");
-/** Packaged builds (the desktop app) ship the web app, MCP server and mock Cursor here instead of the source tree. */
-const RESOURCES = process.env.BATON_RESOURCES;
-export const WEB_DIST = RESOURCES ? path.join(RESOURCES, "web") : path.join(REPO_ROOT, "apps/web/dist");
-export const MCP_BIN = RESOURCES ? path.join(RESOURCES, "mcp/baton-mcp.mjs") : path.join(REPO_ROOT, "packages/mcp/bin/baton-mcp.mjs");
-export const MOCK_CURSOR = RESOURCES ? path.join(RESOURCES, "fixtures/mock-acp-agent.mjs") : path.join(REPO_ROOT, "packages/core/fixtures/mock-acp-agent.mjs");
-
-/** Inside Electron, Baton's own binary only behaves as Node when this is set; outside it is empty. */
-export const NODE_ENV_VARS: Record<string, string> = process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {};
-
-/** A command line that runs `script` with the same Node that runs Baton, so no separate Node install is needed. */
-export function nodeScriptCommand(script: string): string {
-  const env = Object.entries(NODE_ENV_VARS).map(([k, v]) => `${k}=${v}`);
-  return [...(env.length ? ["env", ...env] : []), `"${process.execPath}"`, `"${script}"`].join(" ");
-}
-
-interface Persisted {
-  lastWorkspace?: string;
-  recent: string[];
-}
-
-type Broadcast = (message: unknown) => void;
-
-/** One open workspace: its own orchestrator (write lock, snapshots, approvals) and context tidier. */
-export interface Session {
-  ws: Workspace;
-  orchestrator: Orchestrator;
-  tidier: ContextTidier;
-  demo: boolean;
-}
-
-interface ChatGptLogin {
-  method: ChatGptMethod;
-  url?: string;
-  controller: AbortController;
-  manual?: (input: string) => void;
-}
-
-export interface ModelOption {
-  id: string;
-  name: string;
-  contextWindow?: number;
-  /** Pi routes: the thinking levels the model supports; absent when it doesn't reason. */
-  thinking?: ThinkingLevel[];
-}
-
-/** What the browser names when it picks a model. */
-export interface ModelPickInput {
-  source?: string;
-  model?: string;
-  provider?: string;
-  thinking?: string;
-  /** GPT fast service tier. */
-  fast?: boolean | string;
-}
-
-export interface AddKeyInput {
-  template?: string;
-  key?: string;
-  label?: string;
-  baseUrl?: string;
-  /** Model ids to use when the endpoint has no `/models`. */
-  models?: string[];
-}
-
-/** Login errors can quote token responses; keep anything token-like out of what reaches the browser. */
-function loginError(error: Error): string {
-  return error.message.replace(/[A-Za-z0-9_\-.]{40,}/g, "[已隐藏]").slice(0, 300);
-}
-
-export interface AppStateOptions {
-  /** Base URL the MCP server and `baton` CLI call back into. */
-  baseUrl: string;
-  /** Global data directory (credentials, device id, recent workspaces, demo workspace). Defaults to `batonHome()`. */
-  home?: string;
-  /** Workspace to open on init instead of `BATON_WORKSPACE` / the last one / the demo workspace. */
-  workspace?: string;
-  demo?: boolean;
-  /** Cursor CLI command written into every workspace this state opens. */
-  cursorCommand?: string;
-  /** Streaming speed of the demo models. */
-  demoTokensPerSecond?: number;
-  /** Folder dialog for opening a project. Defaults to the system dialog; tests pass their own. */
-  pickDirectory?: DirectoryPicker;
-  /** Codex CLI's auth.json. Tests point this at a fixture so a developer login is never imported. */
-  codexAuthFile?: string;
-}
+export const WEB_DIST = process.env.BATON_RESOURCES ? path.join(process.env.BATON_RESOURCES, "web") : path.join(REPO_ROOT, "apps/web/dist");
+interface Data { projects: Project[]; threads: Thread[] }
+interface Active { controller: AbortController; promise: Promise<void>; pi?: OpenPi; run: Run }
+interface Approval { thread: Thread; item: Item; resolve(allow: boolean): void }
+export interface AppStateOptions { baseUrl?: string; home?: string; pickDirectory?: DirectoryPicker; runtime?: () => Promise<ModelRuntime>; approvalTimeoutMs?: number }
 
 export class AppState {
   readonly home: string;
-  readonly baseUrl: string;
-  readonly credentials: FileCredentialStore;
-  readonly pi: PiExecutor;
-  readonly acp = new AcpExecutor();
-  private sessions = new Map<string, Session>();
-  private current!: Session;
-  private persisted: Persisted;
-  private auth: { chatgpt?: ChatGptMethod } = {};
-  private keyAccounts: KeyAccount[] = [];
-  /** Providers whose key is in the credential store. */
-  private keysConfigured = new Set<string>();
-  private chatgptError?: string;
-  /** Each project names its own Cursor CLI command, so sign-in state and models are kept per command. */
-  private cursorByCommand = new Map<string, CursorStatus>();
-  private cursorCheckedAt = 0;
-  private cursorModelsCache = new Map<string, { at: number; models: CursorModel[]; error?: string }>();
-  private chatgptLogin?: ChatGptLogin;
-  private cursorLoginFlow?: { url?: string; cancel: () => void };
+  readonly gateway: Gateway;
+  private data: Data;
+  private lockToken?: string;
+  private clients = new Set<(event: unknown) => void>();
+  private active = new Map<string, Active>();
+  private queues = new Map<string, Promise<void>>();
+  private approvals = new Map<string, Approval>();
   private picking?: Promise<string | undefined>;
-  private clients = new Set<Broadcast>();
-  private readonly codexAuthFile: string;
-
-  constructor(private readonly options: AppStateOptions) {
-    this.baseUrl = options.baseUrl;
-    this.home = options.home ?? batonHome();
-    this.codexAuthFile = options.codexAuthFile ?? defaultCodexAuthFile();
-    fs.mkdirSync(this.home, { recursive: true });
-    this.credentials = new FileCredentialStore(this.home);
-    this.credentials.onSaved = (providerId, previous, next) => {
-      if (providerId !== CHATGPT_PROVIDERS.codex || previous?.type !== "oauth" || next.type !== "oauth") return;
-      const accountId = typeof next.accountId === "string" ? next.accountId : undefined;
-      writeCodexRefresh(this.codexAuthFile, previous.refresh, { access: next.access, refresh: next.refresh, accountId });
-    };
-    this.pi = new PiExecutor({ credentials: this.credentials, agentDir: path.join(this.home, "pi-agent"), demoTokensPerSecond: options.demoTokensPerSecond });
-    this.persisted = readJson<Persisted>(path.join(this.home, "state.json"), { recent: [] });
+  private saveTimer?: ReturnType<typeof setTimeout>;
+  closing = false;
+  constructor(private options: AppStateOptions = {}) {
+    this.home = path.join(options.home ?? process.env.BATON_HOME ?? path.join(os.homedir(), ".baton"), "v2");
+    fs.mkdirSync(this.home, { recursive: true, mode: 0o700 });
+    this.gateway = new Gateway(this.home);
+    this.data = { projects: [], threads: [] };
   }
-
-  /** The current project: what the management pages show and where a new chat opens by default. */
-  get ws(): Workspace {
-    return this.current.ws;
-  }
-
-  get orchestrator(): Orchestrator {
-    return this.current.orchestrator;
-  }
-
-  get tidier(): ContextTidier {
-    return this.current.tidier;
-  }
-
-  get demo(): boolean {
-    return this.current.demo;
-  }
-
-  /** Open projects in sidebar order. */
-  projects(): Session[] {
-    return this.persisted.recent.map((root) => this.sessions.get(root)).filter((s): s is Session => Boolean(s));
-  }
-
-  sessionByRoot(root: string): Session | undefined {
-    return this.sessions.get(root);
-  }
-
-  sessionOfThread(threadId: string): Session | undefined {
-    return [...this.sessions.values()].find((s) => s.orchestrator.getThread(threadId));
-  }
-
-  sessionOfRun(runId: string): Session | undefined {
-    return [...this.sessions.values()].find((s) => s.orchestrator.findRun(runId));
-  }
-
-  sessionOfApproval(approvalId: string): Session | undefined {
-    return [...this.sessions.values()].find((s) => s.orchestrator.hasApproval(approvalId));
-  }
-
-  /** Tool calls from the MCP server or `baton` CLI go to the project whose run holds the token. */
-  bridgeTool(token: string | undefined, tool: string, args: unknown) {
-    const sessions = [...this.sessions.values()];
-    if (token) return (sessions.find((s) => s.orchestrator.ownsToken(token)) ?? this.current).orchestrator.bridgeTool(token, tool, args);
-    // Without a token, only an unambiguous single Cursor run (across every project) may be guessed.
-    const cursor = sessions.filter((s) => s.orchestrator.cursorRunCount() > 0);
-    const single = cursor.length === 1 && cursor[0]!.orchestrator.cursorRunCount() === 1 ? cursor[0] : undefined;
-    return (single ?? this.current).orchestrator.bridgeTool(undefined, tool, args, { guessCursorRun: Boolean(single) });
-  }
-
-  async stopAll(): Promise<void> {
-    await Promise.all([...this.sessions.values()].map((s) => s.orchestrator.stopAll()));
-  }
-
-  subscribe(send: Broadcast): () => void {
-    this.clients.add(send);
-    return () => this.clients.delete(send);
-  }
-
-  broadcast(message: unknown): void {
-    for (const send of this.clients) send(message);
-  }
-
-  async init(): Promise<void> {
-    if (process.env.OPENAI_API_KEY) {
-      // GPT is only reachable through Sign in with ChatGPT; an API key must never take precedence.
-      delete process.env.OPENAI_API_KEY;
-      console.log("[baton] ignoring OPENAI_API_KEY: GPT models are only used through ChatGPT login");
-    }
-    const envWs = this.options.workspace ?? process.env.BATON_WORKSPACE;
-    const demoDir = path.join(this.home, "demo-workspace");
-    const target = envWs ? path.resolve(envWs) : this.persisted.lastWorkspace && fs.existsSync(this.persisted.lastWorkspace) ? this.persisted.lastWorkspace : demoDir;
-    if (target === demoDir) fs.mkdirSync(demoDir, { recursive: true });
-    this.openWorkspace(target, { demo: this.options.demo ?? (this.isDemoDir(target) || process.env.BATON_DEMO === "1") });
-    // Every project in the sidebar is live, so its chats can be opened and keep running without switching to it.
-    for (const root of this.persisted.recent) {
-      if (this.sessions.has(root) || !fs.existsSync(root)) continue;
-      try {
-        this.sessions.set(root, this.createSession(root, this.isDemoDir(root)));
-      } catch (error) {
-        console.error(`[baton] could not open ${root}:`, (error as Error).message);
+  async init() {
+    const file = path.join(this.home, "instance.lock");
+    const token = id();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { fs.writeFileSync(file, JSON.stringify({ pid: process.pid, token }), { flag: "wx", mode: 0o600 }); this.lockToken = token; break; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const owner = readJson<{ pid?: number }>(file, {});
+        if (!owner.pid) throw new Error("Baton 数据目录的锁文件无效，请保留并排查，未修改会话");
+        try { process.kill(owner.pid, 0); throw new Error("此 Baton 数据目录已经由另一个进程使用，请先退出它"); }
+        catch (probe) { if ((probe as NodeJS.ErrnoException).code !== "ESRCH") throw probe; }
+        fs.unlinkSync(file);
       }
     }
-    await this.loadKeyAccounts();
-    await importCodexLogin(this.credentials, this.codexAuthFile);
-    await this.refreshAuth(true);
-  }
-
-  /** Makes `root` the current project, opening it first if needed; chats in other projects keep running. */
-  openWorkspace(root: string, options: { demo?: boolean; create?: boolean } = {}): void {
-    const resolved = path.resolve(root);
-    if (!fs.existsSync(resolved)) {
-      if (!options.create) throw new Error(`目录不存在：${resolved}`);
-      fs.mkdirSync(resolved, { recursive: true });
+    if (!this.lockToken) throw new Error("无法取得 Baton 数据目录锁");
+    try {
+      this.data = readJson(path.join(this.home, "state.json"), { projects: [], threads: [] });
+    for (const t of this.data.threads) {
+      if (t.access === "allow") t.access = "ask";
+      t.status = "idle";
+      for (const run of t.runs) if (["running", "queued"].includes(run.status)) { run.status = "interrupted"; run.endedAt = now(); run.error = "应用退出前未完成；未自动重放命令"; }
+      for (const item of t.items) if (item.kind === "approval" && item.status === "pending") item.status = "expired";
+      if (t.pending.length) this.item(t, { kind: "notice", text: "上次未投递的插话仍保留，请确认后手动重新发送。" });
     }
-    if (!fs.statSync(resolved).isDirectory()) throw new Error(`不是目录：${resolved}`);
-    let session = this.sessions.get(fs.realpathSync(resolved));
-    if (!session) {
-      session = this.createSession(resolved, options.demo ?? this.isDemoDir(resolved));
-      this.sessions.set(session.ws.root, session);
-    }
-    this.current = session;
-    const opened = session.ws.root;
-    this.persisted.lastWorkspace = opened;
-    // Sidebar order stays put when switching; a newly opened project goes on top.
-    if (!this.persisted.recent.includes(opened)) this.persisted.recent = [opened, ...this.persisted.recent].slice(0, 12);
-    this.savePersisted();
-    this.broadcast({ type: "state" });
+    this.save();
+    } catch (error) { this.releaseLock(); throw error; }
   }
-
-  /** System folder dialog. Undefined when the user cancels; one dialog at a time. */
-  pickDirectory(): Promise<string | undefined> {
-    if (this.picking) return Promise.reject(new Error("已经有一个文件夹选择框开着"));
-    const run = (async () => {
-      const picked = (await (this.options.pickDirectory ?? chooseDirectory)())?.trim();
-      if (!picked) return undefined;
-      return picked.replace(/\/+$/, "") || "/";
-    })();
-    this.picking = run;
-    // The caller awaits `run`; this copy only clears the lock, so its rejection must not surface on its own.
-    void run.finally(() => {
-      if (this.picking === run) this.picking = undefined;
-    }).catch(() => undefined);
-    return run;
+  private releaseLock() {
+    if (!this.lockToken) return;
+    const file = path.join(this.home, "instance.lock");
+    if (readJson<{ token?: string }>(file, {}).token === this.lockToken) fs.unlinkSync(file);
+    this.lockToken = undefined;
   }
-
-  /** Takes a project off the list (files untouched); the current one hands over to the next project. */
-  closeWorkspace(root: string): void {
-    const session = this.sessions.get(root);
-    if (!session) throw new Error("这个项目不在列表里");
-    if (session.orchestrator.isBusy()) throw new Error("这个项目里有对话在回复，先取消再移除");
-    const rest = this.projects().filter((s) => s !== session);
-    if (session === this.current) {
-      if (!rest.length) throw new Error("至少要留一个项目");
-      this.current = rest[0]!;
-      this.persisted.lastWorkspace = this.current.ws.root;
-    }
-    this.sessions.delete(root);
-    this.persisted.recent = this.persisted.recent.filter((r) => r !== root);
-    this.savePersisted();
-    this.broadcast({ type: "state" });
+  view(): AppView { return { ...this.data, threads: this.data.threads.filter(t => !t.archivedAt), archivedThreads: this.data.threads.filter(t => t.archivedAt).map(({ id, projectId, title, archivedAt, updatedAt }) => ({ id, projectId, title, archivedAt, updatedAt })), gateway: this.gateway.public(), closing: this.closing }; }
+  subscribe(fn: (event: unknown) => void) { this.clients.add(fn); return () => { this.clients.delete(fn); }; }
+  broadcast(event: unknown = { type: "state" }) { for (const fn of this.clients) fn(event); }
+  private changed() { this.broadcast(); if (!this.saveTimer) this.saveTimer = setTimeout(() => this.save(), 40); }
+  save() { if (this.saveTimer) clearTimeout(this.saveTimer); this.saveTimer = undefined; atomic(path.join(this.home, "state.json"), JSON.stringify(this.data)); }
+  private requireOpen() { if (this.closing) throw new Error("应用正在退出"); }
+  project(pid?: string) { if (!pid) throw new Error("此操作需要先打开项目"); const p = this.data.projects.find(p => p.id === pid); if (!p || p.removed) throw new Error("项目不存在或已移除"); return p; }
+  thread(tid: string) { const t = this.data.threads.find(t => t.id === tid); if (!t || t.archivedAt) throw new Error("对话不存在或已归档"); if (t.projectId) this.project(t.projectId); return t; }
+  private context(thread: Thread): Project {
+    if (thread.projectId) return this.project(thread.projectId);
+    // Pi needs a cwd for session metadata; ordinary chats expose no filesystem tools.
+    const root = path.join(this.home, "chats", thread.id);
+    fs.mkdirSync(root, { recursive: true });
+    return { id: `chat:${thread.id}`, root, name: "普通聊天", resources: [], mcp: [] };
   }
-
-  private savePersisted(): void {
-    writeFileAtomic(path.join(this.home, "state.json"), JSON.stringify(this.persisted, null, 2));
+  private idleProject(pid: string) { if ([...this.active.values()].some(a => a.run.projectId === pid)) throw new Error("项目仍有运行或排队任务，请先停止后再操作"); }
+  async pickDirectory() { if (this.picking) throw new Error("文件夹选择框已打开"); this.picking = (this.options.pickDirectory ?? chooseDirectory)(); try { return await this.picking; } finally { this.picking = undefined; } }
+  openProject(root: string) {
+    this.requireOpen(); root = fs.realpathSync(root.replace(/^~(?=$|[/\\])/, os.homedir()));
+    if (!fs.statSync(root).isDirectory()) throw new Error("请选择项目文件夹");
+    if (inside(root, this.home) || inside(this.home, root)) throw new Error("项目不能包含 Baton 数据目录");
+    const existing = this.data.projects.find(p => p.root === root);
+    if (existing) { existing.removed = false; this.save(); this.changed(); return existing; }
+    const project: Project = { id: id(), root, name: path.basename(root), resources: [], mcp: [] };
+    discover(project, path.join(this.home, "resources")); this.data.projects.push(project); this.save(); this.changed(); return project;
   }
-
-  private createSession(root: string, demo: boolean): Session {
-    const ws = Workspace.open(root, { demo });
-    if (this.options.cursorCommand && ws.settings().cursor.command !== this.options.cursorCommand) {
-      ws.saveSettings({ ...ws.settings(), cursor: { command: this.options.cursorCommand } });
-    }
-    ws.ensureCursorMcp({ command: process.execPath, args: [MCP_BIN], env: { ...NODE_ENV_VARS, BATON_URL: this.baseUrl } });
-    const orchestrator: Orchestrator = new Orchestrator({
-      ws,
-      pi: this.pi,
-      acp: this.acp,
-      unavailable: (model) => this.unavailable(model.source, session, model.provider),
-      onEvent: (event: OrchestratorEvent) => this.broadcast({ ...event, workspace: ws.root }),
-      mcpLaunch: (token) => ({ command: process.execPath, args: [MCP_BIN], env: { ...NODE_ENV_VARS, BATON_URL: this.baseUrl, BATON_TOKEN: token } }),
+  removeProject(pid: string) { this.idleProject(pid); this.project(pid).removed = true; this.save(); this.changed(); }
+  createThread(pid?: string, model?: ModelPick) {
+    this.requireOpen(); if (pid !== undefined) this.project(pid); if (model) model = this.gateway.normalize(model);
+    const thread: Thread = { id: id(), projectId: pid, title: "新对话", access: pid ? "ask" : "read", model, status: "idle", createdAt: now(), updatedAt: now(), runs: [], items: [], pending: [] };
+    this.data.threads.push(thread); this.save(); this.changed(); return thread;
+  }
+  archiveThread(tid: string) {
+    this.requireOpen();
+    const thread = this.thread(tid);
+    if (this.active.has(tid)) throw new Error("请先停止这段对话的任务，再归档对话");
+    thread.archivedAt = now(); this.save(); this.changed();
+  }
+  restoreThread(tid: string) {
+    this.requireOpen();
+    const thread = this.data.threads.find(t => t.id === tid);
+    if (!thread) throw new Error("对话不存在");
+    if (thread.projectId) this.project(thread.projectId);
+    delete thread.archivedAt; this.save(); this.changed(); return thread;
+  }
+  startThread(input: { projectId?: string; model: ModelPick; access?: Access; text: string }) {
+    if (!input.text.trim()) throw new Error("请输入消息");
+    if (!input.model || typeof input.model.id !== "string") throw new Error("请选择已验证模型");
+    this.gateway.normalize(input.model);
+    const access = input.projectId ? input.access ?? "ask" : "read";
+    if (!["read", "ask", "allow"].includes(access)) throw new Error("无效权限档位");
+    const thread = this.createThread(input.projectId, input.model);
+    thread.access = access;
+    this.send(thread.id, input.text);
+    return thread;
+  }
+  updateThread(tid: string, patch: { title?: string; access?: Access; model?: ModelPick }) {
+    const thread = this.thread(tid); if (this.active.has(tid)) throw new Error("请在本次运行结束后切换模型或权限");
+    if (patch.title !== undefined) thread.title = patch.title.slice(0, 120);
+    if (patch.access) { if (!["read", "ask", "allow"].includes(patch.access)) throw new Error("无效权限档位"); if (!thread.projectId && patch.access !== "read") throw new Error("普通聊天不开放项目工具，请先打开项目"); thread.access = patch.access; }
+    if (patch.model) { thread.model = this.gateway.normalize(patch.model); }
+    this.save(); this.changed(); return thread;
+  }
+  configureGateway(input: { url: string; token?: string }) { if (this.active.size) throw new Error("运行结束后才能修改网关连接"); this.gateway.configure(input); this.changed(); return this.gateway.public(); }
+  item(thread: Thread, value: Omit<Item, "id" | "at">) { const item = { id: id(), at: now(), ...value, text: this.gateway.redact(value.text) }; thread.items.push(item); thread.updatedAt = now(); this.changed(); return item; }
+  private snapshots(project: Project) { return new Snapshots(project.root, path.join(this.home, "changes", project.id)); }
+  private async approve(thread: Thread, run: Run, signal: AbortSignal, tool: string, args: unknown, preview: string) {
+    signal.throwIfAborted();
+    if (thread.access === "read") throw new Error("当前对话为只读，不能修改文件、执行命令或调用外部工具");
+    if (thread.access === "allow") return;
+    const approvalId = id();
+    const item = this.item(thread, { kind: "approval", approvalId, runId: run.id, tool, args, text: preview, status: "pending" });
+    const allowed = await new Promise<boolean>(resolve => {
+      let settled = false;
+      const finish = (allow: boolean, status: string) => { if (settled) return; settled = true; clearTimeout(timer); signal.removeEventListener("abort", abort); item.status = status; this.approvals.delete(approvalId); this.save(); this.changed(); resolve(allow); };
+      const abort = () => finish(false, "expired");
+      const timer = setTimeout(abort, this.options.approvalTimeoutMs ?? 10 * 60_000);
+      this.approvals.set(approvalId, { thread, item, resolve: allow => finish(allow, allow ? "allowed" : "denied") });
+      signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort();
     });
-    const tidier = new ContextTidier(ws, {
-      model: () => this.tidyModel(demo),
-      unavailableReason: () => "整理员用 DeepSeek，请先到「模型」页添加 DeepSeek 的 API key",
-      onChange: () => this.broadcast({ type: "tidy", workspace: ws.root }),
+    signal.throwIfAborted(); if (!allowed) throw new Error("用户拒绝或审批已失效；此次操作未执行");
+  }
+  resolveApproval(aid: string, allow: boolean) { const approval = this.approvals.get(aid); if (!approval) throw new Error("审批已处理、取消或失效"); approval.resolve(allow); }
+  private queue(thread: Thread, prompt: string, task: (active: Active, project: Project) => Promise<void>) {
+    this.requireOpen(); if (this.active.has(thread.id)) throw new Error("当前对话已有任务，请使用插话或排队消息");
+    const project = this.context(thread);
+    const run: Run = { id: id(), projectId: thread.projectId, threadId: thread.id, model: thread.model ?? { id: "local" }, status: "queued", prompt, startedAt: now(), changedFiles: [] };
+    thread.runs.push(run); thread.status = "queued";
+    const active: Active = { run, controller: new AbortController(), promise: Promise.resolve() };
+    this.active.set(thread.id, active);
+    const previous = this.queues.get(project.id) ?? Promise.resolve();
+    active.promise = previous.catch(() => {}).then(async () => {
+      try { active.controller.signal.throwIfAborted(); run.status = "running"; thread.status = "running"; this.save(); this.changed(); await task(active, project); if (active.controller.signal.aborted) run.status = "cancelled"; else if (run.status === "running") run.status = "succeeded"; }
+      catch (e) { run.status = active.controller.signal.aborted ? "cancelled" : "failed"; run.error = this.gateway.redact(errorText(e)); this.item(thread, { kind: "notice", runId: run.id, text: run.error }); }
+      finally { if (active.pi) await active.pi.close().catch(e => this.item(thread, { kind: "notice", text: `会话清理失败：${errorText(e)}` })); run.endedAt = now(); thread.status = "idle"; this.active.delete(thread.id); this.save(); this.changed(); }
     });
-    ws.onContextWrite = () => tidier.maybeAuto();
-    const session: Session = { ws, orchestrator, tidier, demo };
-    return session;
+    this.queues.set(project.id, active.promise); this.save(); this.changed(); return run;
   }
-
-  /** Workspaces are remembered by real path, so compare real paths (macOS's /tmp is a link to /private/tmp). */
-  private isDemoDir(dir: string): boolean {
-    const demoDir = path.join(this.home, "demo-workspace");
-    if (!fs.existsSync(dir) || !fs.existsSync(demoDir)) return false;
-    return fs.realpathSync(dir) === fs.realpathSync(demoDir);
-  }
-
-  // ---------- auth ----------
-
-  /** Why a route can't run right now for a chat in `session`, with where to fix it; undefined when it can. */
-  unavailable(source: CredentialSource, session: Session = this.current, provider?: string): string | undefined {
-    switch (source) {
-      case "demo":
-        return session.demo ? undefined : "演示模型只在演示工作区里可用";
-      case "chatgpt":
-        return this.auth.chatgpt ? undefined : "还没有用 ChatGPT 登录，请到「模型」页登录";
-      case "key": {
-        const account = this.keyAccounts.find((a) => a.provider === provider);
-        if (!account) return "这个 API key 账号已经删除，请到「模型」页重新添加";
-        return this.keysConfigured.has(account.provider) ? undefined : `「${account.label}」还没有 key，请到「模型」页填写`;
-      }
-      case "cursor": {
-        const cursor = this.cursorStatusOf(session);
-        return cursor.loggedIn ? undefined : cursor.installed ? "Cursor 还没有登录，请到「模型」页登录" : "没有找到 Cursor CLI，请到「模型」页查看安装方法";
-      }
-      default:
-        return "不支持的账号来源";
-    }
-  }
-
-  private cursorStatusOf(session: Session): CursorStatus {
-    return this.cursorByCommand.get(session.ws.settings().cursor.command) ?? { installed: false, loggedIn: false };
-  }
-
-  async refreshAuth(includeCursor = false): Promise<void> {
-    this.auth.chatgpt = await chatgptMethod(this.credentials);
-    const configured = await Promise.all(this.keyAccounts.map(async (a) => [a.provider, (await this.credentials.read(a.provider))?.type === "api_key"] as const));
-    this.keysConfigured = new Set(configured.filter(([, ok]) => ok).map(([p]) => p));
-    const currentCommand = this.ws.settings().cursor.command;
-    if (includeCursor || Date.now() - this.cursorCheckedAt > 60_000 || !this.cursorByCommand.has(currentCommand)) {
-      this.cursorCheckedAt = Date.now();
-      const commands = new Set([currentCommand, ...[...this.sessions.values()].map((s) => s.ws.settings().cursor.command)]);
-      const statuses = await Promise.all([...commands].map(async (command) => [command, await cursorStatus(command)] as const));
-      this.cursorByCommand = new Map(statuses);
-    }
-  }
-
-  authStatus(): AuthStatus {
-    return {
-      chatgpt: {
-        loggedIn: Boolean(this.auth.chatgpt),
-        method: this.auth.chatgpt,
-        pending: this.chatgptLogin?.url ? { url: this.chatgptLogin.url, method: this.chatgptLogin.method } : undefined,
-        error: this.chatgptError,
-      },
-      cursor: { ...this.cursorStatusOf(this.current), pending: this.cursorLoginFlow?.url ? { url: this.cursorLoginFlow.url } : undefined },
-      keys: this.keyAccounts.map((a): KeyAccountStatus => ({ id: a.id, template: a.template, label: a.label, provider: a.provider, baseUrl: a.baseUrl, configured: this.keysConfigured.has(a.provider) })),
-    };
-  }
-
-  // ---------- API key accounts ----------
-
-  private get keysFile(): string {
-    return path.join(this.home, "keys.json");
-  }
-
-  /** Loads the key accounts; a DeepSeek key saved before any key could be added becomes the first account. */
-  private async loadKeyAccounts(): Promise<void> {
-    if (fs.existsSync(this.keysFile)) {
-      this.keyAccounts = readJson<{ accounts?: KeyAccount[] }>(this.keysFile, {}).accounts ?? [];
-    } else if ((await this.credentials.read("deepseek"))?.type === "api_key") {
-      this.keyAccounts = [{ id: "deepseek", template: "deepseek", label: "DeepSeek", provider: "deepseek", addedAt: nowIso() }];
-      this.saveKeyAccounts();
-    }
-    for (const account of this.keyAccounts) await this.pi.registerKeyAccount(account);
-  }
-
-  private saveKeyAccounts(): void {
-    writeFileAtomic(this.keysFile, `${JSON.stringify({ accounts: this.keyAccounts }, null, 2)}\n`);
-  }
-
-  /** Adds (or, for a catalog service already added, re-keys) an account. The key goes only to the credential store. */
-  async addKey(input: AddKeyInput): Promise<KeyAccountStatus> {
-    const key = (input.key ?? "").trim();
-    const template = input.template ? keyTemplate(input.template) : detectKeyTemplate(key);
-    if (!template) throw new Error(input.template ? `不认识的服务：${input.template}` : "认不出这是哪家服务的 key，请先选择服务");
-    if (/\s/.test(key)) throw new Error("key 里不能有空格或换行");
-    if (!template.keyless && key.length < 8) throw new Error("请填写 API key");
-    if (template.id === "deepseek" && !/^sk-[A-Za-z0-9_-]{16,}$/.test(key)) throw new Error("DeepSeek API key 格式不对（应以 sk- 开头）");
-    const secret = key || "local";
-
-    let account: KeyAccount;
-    if (template.catalog) {
-      const provider = template.provider ?? template.catalog;
-      account = this.keyAccounts.find((a) => a.provider === provider) ?? { id: template.id, template: template.id, label: input.label?.trim() || template.label, provider, addedAt: nowIso() };
-    } else {
-      const baseUrl = (input.baseUrl?.trim() || template.baseUrl || "").replace(/\/+$/, "");
-      if (!/^https?:\/\/\S+$/.test(baseUrl)) throw new Error("请填写以 http:// 或 https:// 开头的服务地址");
-      const api = template.api ?? "openai-completions";
-      const typed = (input.models ?? []).map((m) => m.trim()).filter(Boolean);
-      const models = typed.length ? typed.map((id) => ({ id, name: id })) : await discoverModels({ api, baseUrl, key: secret });
-      const id = newId("key");
-      const sameLabel = this.keyAccounts.filter((a) => a.template === template.id).length;
-      account = {
-        id,
-        template: template.id,
-        label: input.label?.trim() || (sameLabel ? `${template.label} ${sameLabel + 1}` : template.label),
-        provider: `custom-${id}`,
-        api,
-        baseUrl,
-        models,
-        addedAt: nowIso(),
+  send(tid: string, prompt: string) {
+    const thread = this.thread(tid); if (!prompt.trim()) throw new Error("请输入任务"); if (!thread.model) throw new Error("请选择已验证模型"); thread.model = this.gateway.normalize(thread.model);
+    if (thread.title === "新对话") thread.title = prompt.slice(0, 60);
+    return this.queue(thread, prompt, async (active, project) => {
+      const { run, controller } = active, signal = controller.signal;
+      const snapshots = this.snapshots(project), writable = !!thread.projectId && thread.access !== "read";
+      let lastTree = writable ? snapshots.begin(run.id) : undefined;
+      let blocked: string | undefined;
+      let pendingWrites = 0;
+      const hooks: PiHooks = {
+        signal, persist: () => this.save(),
+        approve: (tool, args, preview) => this.approve(thread, run, signal, tool, args, preview),
+        before: write => {
+          signal.throwIfAborted();
+          if (write && !writable) throw new Error("只读运行不能执行写操作");
+          if (lastTree && pendingWrites === 0) { const current = snapshots.scan(); if (snapshots.differences(lastTree, current).length) blocked = "运行期间检测到非工具改动，无法确定归属，请手动恢复"; lastTree = current; }
+          if (write) pendingWrites++;
+        },
+        after: (write, expected) => {
+          if (!lastTree) return;
+          const current = snapshots.scan(); const differences = snapshots.differences(lastTree, current);
+          if (((!write || !expected) && differences.length) || (expected && differences.some(p => !expected.includes(p)))) blocked = "运行期间出现无法确定归属的改动，请手动恢复";
+          if (write) pendingWrites = Math.max(0, pendingWrites - 1);
+          lastTree = current;
+        },
+        notice: text => this.item(thread, { kind: "notice", runId: run.id, text }),
+        usage: usage => { const previous = run.usage; run.usage = { source: "reported", input: usage.input === undefined ? undefined : (previous?.input ?? 0) + usage.input, output: usage.output === undefined ? undefined : (previous?.output ?? 0) + usage.output, total: usage.total === undefined ? undefined : (previous?.total ?? 0) + usage.total }; },
+        event: event => {
+          if (event.type === "message_start" && event.message.role === "user") {
+            const text = typeof event.message.content === "string" ? event.message.content : event.message.content.filter(c => c.type === "text").map(c => c.text).join("\n");
+            this.item(thread, { kind: "user", runId: run.id, text });
+            const i = thread.pending.findIndex(p => p.text === text); if (i >= 0) thread.pending.splice(i, 1);
+          }
+          if (event.type === "message_start" && event.message.role === "assistant") this.item(thread, { kind: "assistant", runId: run.id, text: "", status: "running" });
+          if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") { const item = thread.items.findLast(i => i.kind === "assistant" && i.runId === run.id); if (item) item.text += this.gateway.redact(event.assistantMessageEvent.delta); this.changed(); }
+          if (event.type === "message_end" && event.message.role === "assistant") {
+            const item = thread.items.findLast(i => i.kind === "assistant" && i.runId === run.id); if (item) item.status = event.message.stopReason;
+            if (["error", "aborted"].includes(event.message.stopReason)) { run.status = signal.aborted ? "cancelled" : "failed"; run.error = this.gateway.redact(event.message.errorMessage ?? "模型响应失败"); }
+          }
+          if (event.type === "tool_execution_start") this.item(thread, { kind: "tool", runId: run.id, tool: event.toolName, args: event.args, text: "", status: "running" });
+          if (event.type === "tool_execution_end") { const item = thread.items.findLast(i => i.kind === "tool" && i.runId === run.id && i.tool === event.toolName && i.status === "running"); if (item) { item.text = this.gateway.redact(JSON.stringify(event.result, null, 2)); item.status = event.isError ? "error" : "ok"; } this.changed(); }
+        },
       };
-    }
-    await this.credentials.modify(account.provider, async () => ({ type: "api_key", key: secret }));
-    if (!this.keyAccounts.includes(account)) this.keyAccounts.push(account);
-    this.saveKeyAccounts();
-    await this.pi.registerKeyAccount(account);
-    await this.refreshAuth();
-    this.broadcast({ type: "state" });
-    return this.authStatus().keys.find((k) => k.id === account.id)!;
-  }
-
-  async removeKey(id: string): Promise<void> {
-    const account = this.keyAccounts.find((a) => a.id === id);
-    if (!account) throw new Error("没有这个 API key 账号");
-    await this.credentials.delete(account.provider);
-    await this.pi.unregisterKeyAccount(account.provider);
-    this.keyAccounts = this.keyAccounts.filter((a) => a !== account);
-    this.saveKeyAccounts();
-    await this.refreshAuth();
-    this.broadcast({ type: "state" });
-  }
-
-  /** Reloads a custom endpoint's `/models`. */
-  async refreshKeyModels(id: string): Promise<number> {
-    const account = this.keyAccounts.find((a) => a.id === id);
-    if (!account) throw new Error("没有这个 API key 账号");
-    if (!account.baseUrl || !account.api) throw new Error("这个服务的模型列表来自内置目录，不需要刷新");
-    const credential = await this.credentials.read(account.provider);
-    const key = credential?.type === "api_key" ? (credential.key ?? "") : "";
-    account.models = await discoverModels({ api: account.api, baseUrl: account.baseUrl, key });
-    this.saveKeyAccounts();
-    await this.pi.registerKeyAccount(account);
-    return account.models.length;
-  }
-
-  keyAccount(provider: string): KeyAccount | undefined {
-    return this.keyAccounts.find((a) => a.provider === provider);
-  }
-
-  listKeyAccounts(): KeyAccount[] {
-    return this.keyAccounts;
-  }
-
-  /** Starts a ChatGPT login with either method and resolves with the authorization URL. */
-  async startChatGptLogin(method: ChatGptMethod = "chatgpt"): Promise<string> {
-    this.chatgptLogin?.controller.abort();
-    const controller = new AbortController();
-    const flow: ChatGptLogin = { method, controller };
-    this.chatgptLogin = flow;
-    this.chatgptError = undefined;
-    const runtime = await this.pi.runtime();
-    const url = new Promise<string>((resolve, reject) => {
-      const done = runtime.login(
-        CHATGPT_PROVIDERS[method],
-        "oauth",
-        {
-          signal: controller.signal,
-          notify: (event) => {
-            if (event.type === "auth_url") {
-              flow.url = event.url;
-              resolve(event.url);
-              this.broadcast({ type: "state" });
-            }
-          },
-          prompt: (p: AuthPrompt) =>
-            new Promise<string>((res, rej) => {
-              // The Codex login first asks browser or device code; Baton always opens the browser.
-              if (p.type === "select" && p.options.some((o) => o.id === "browser")) return res("browser");
-              if (p.type !== "manual_code") return rej(new Error(`不支持的登录交互：${p.type}`));
-              flow.manual = res;
-              p.signal?.addEventListener("abort", () => rej(new Error("aborted")), { once: true });
-            }),
-        },
-        { getDeviceId: () => deviceId(this.home), agentName: "Baton" },
-      );
-      done.then(
-        async () => {
-          if (this.chatgptLogin === flow) this.chatgptLogin = undefined;
-          // Keep a single ChatGPT credential so the status always names the method that runs.
-          const other = method === "chatgpt" ? "codex" : "chatgpt";
-          await this.credentials.delete(CHATGPT_PROVIDERS[other]);
-          await this.refreshAuth();
-          this.broadcast({ type: "state" });
-        },
-        (error: Error) => {
-          if (this.chatgptLogin !== flow) return reject(error);
-          this.chatgptLogin = undefined;
-          if (!controller.signal.aborted) this.chatgptError = loginError(error);
-          reject(error);
-          this.broadcast({ type: "state" });
-        },
-      );
+      try {
+        active.pi = await openPi({ home: this.home, project, thread, gateway: this.gateway, hooks, runtime: await this.options.runtime?.() });
+        signal.throwIfAborted();
+        const abort = () => { void active.pi?.session.abort(); }; signal.addEventListener("abort", abort, { once: true });
+        try { await active.pi.session.prompt(prompt, { expandPromptTemplates: false }); }
+        finally { signal.removeEventListener("abort", abort); }
+      } finally {
+        if (active.pi) { await active.pi.close(); active.pi = undefined; }
+        if (writable) {
+          try { const current = snapshots.scan(); if (lastTree && snapshots.differences(lastTree, current).length) blocked ??= "工具结束后出现外部编辑，请手动核对恢复"; run.changedFiles = snapshots.finish(run.id, blocked); run.restoreBlocked = blocked; }
+          catch (e) { run.restoreBlocked = `改动记录未完成：${errorText(e)}`; hooks.notice(run.restoreBlocked); }
+        }
+      }
     });
-    return url;
   }
-
-  submitChatGptManual(input: string): void {
-    if (!this.chatgptLogin?.manual) throw new Error("没有进行中的 ChatGPT 登录");
-    this.chatgptLogin.manual(input.trim());
+  async inject(tid: string, text: string, mode: "steer" | "followUp") {
+    const thread = this.thread(tid), active = this.active.get(tid);
+    if (!active?.pi || !active.pi.session.isStreaming) throw new Error("模型尚未运行或已经结束，请直接发送新消息");
+    if (!["steer", "followUp"].includes(mode) || !text.trim()) throw new Error("无效的插话消息");
+    thread.pending.push({ text, mode }); this.save();
+    await (mode === "steer" ? active.pi.session.steer(text) : active.pi.session.followUp(text)); this.changed();
   }
-
-  cancelChatGptLogin(): void {
-    this.chatgptLogin?.controller.abort();
-    this.chatgptLogin = undefined;
+  async cancel(tid: string) { const active = this.active.get(tid); if (!active) return; active.controller.abort(); await active.pi?.session.abort(); this.changed(); }
+  async wait(tid: string) { await this.active.get(tid)?.promise; }
+  preview(rid: string) { const thread = this.data.threads.find(t => t.runs.some(r => r.id === rid)); if (!thread) throw new Error("运行不存在"); const project = this.project(thread.projectId); this.idleProject(project.id); return this.snapshots(project).preview(rid); }
+  restore(rid: string, token: string) {
+    const thread = this.data.threads.find(t => t.runs.some(r => r.id === rid)); if (!thread) throw new Error("运行不存在"); const project = this.project(thread.projectId); this.idleProject(project.id);
+    const restored = this.snapshots(project).restore(rid, token); thread.runs.find(r => r.id === rid)!.restoredAt = now();
+    this.item(thread, { kind: "notice", runId: rid, text: `已撤销 ${restored.length} 个文件改动；聊天历史保留，外部副作用不在恢复范围内。` }); this.save(); return { restored };
   }
-
-  async logoutChatGpt(): Promise<void> {
-    const runtime = await this.pi.runtime();
-    for (const provider of Object.values(CHATGPT_PROVIDERS)) {
-      await runtime.logout(provider).catch(() => undefined);
-      await this.credentials.delete(provider);
-    }
-    this.chatgptError = undefined;
-    await this.refreshAuth();
-  }
-
-  /** The DeepSeek-only endpoints from before any key could be added. */
-  async setDeepSeekKey(key: string): Promise<void> {
-    await this.addKey({ template: "deepseek", key });
-  }
-
-  async clearDeepSeekKey(): Promise<void> {
-    const account = this.keyAccount("deepseek");
-    if (account) await this.removeKey(account.id);
-  }
-
-  async startCursorLogin(): Promise<string> {
-    this.cursorLoginFlow?.cancel();
-    const login = cursorLogin(this.ws.settings().cursor.command);
-    const flow: { url?: string; cancel: () => void } = { cancel: login.cancel };
-    this.cursorLoginFlow = flow;
-    void login.done.then(async () => {
-      if (this.cursorLoginFlow === flow) this.cursorLoginFlow = undefined;
-      await this.refreshAuth(true);
-      this.broadcast({ type: "state" });
+  compact(tid: string, instructions: string) {
+    const thread = this.thread(tid); if (!thread.model || !thread.sessionFile) throw new Error("此对话尚无可压缩的 Pi 历史"); this.gateway.pick(thread.model);
+    return this.queue(thread, "手动压缩上下文", async active => {
+      active.pi = await openPi({ home: this.home, project: this.context(thread), thread, gateway: this.gateway, runtime: await this.options.runtime?.(), hooks: { signal: active.controller.signal, persist: () => this.save(), approve: async () => { throw new Error("压缩不执行工具"); }, before() {}, after() {}, event() {}, usage() {}, notice: text => this.item(thread, { kind: "notice", text }) } });
+      const abort = () => active.pi?.session.abortCompaction(); active.controller.signal.addEventListener("abort", abort, { once: true });
+      try { active.controller.signal.throwIfAborted(); await active.pi.session.compact(instructions); this.item(thread, { kind: "notice", text: "上下文压缩已完成，完整历史仍保存在 Pi 会话中。" }); }
+      finally { active.controller.signal.removeEventListener("abort", abort); }
     });
-    flow.url = await login.url;
-    return flow.url;
   }
-
-  async listCursorModels(force = false, session: Session = this.current): Promise<{ models: CursorModel[]; error?: string }> {
-    const command = session.ws.settings().cursor.command;
-    const cached = this.cursorModelsCache.get(command);
-    if (!force && cached && Date.now() - cached.at < 5 * 60_000) return cached;
-    const result = await cursorModels(command);
-    this.cursorModelsCache.set(command, { at: Date.now(), ...result });
-    return result;
+  resources(pid: string) { const project = this.project(pid); discover(project, path.join(this.home, "resources")); currentResources(project); this.save(); return project.resources; }
+  inspectMcp(tid: string) {
+    const thread = this.thread(tid); this.project(thread.projectId); if (!thread.model) throw new Error("请先为此对话选择模型，连接检查本身不会请求模型");
+    return this.queue(thread, "检查 MCP 连接", async active => {
+      active.pi = await openPi({ home: this.home, project: this.project(thread.projectId), thread, gateway: this.gateway, runtime: await this.options.runtime?.(), hooks: { signal: active.controller.signal, persist: () => this.save(), approve: async () => { throw new Error("连接检查不调用工具"); }, before() {}, after() {}, event() {}, usage() {}, notice: text => this.item(thread, { kind: "notice", runId: active.run.id, text }) } });
+      await active.pi.session.prompt("/mcp");
+      const names = active.pi.session.getAllTools().map(t => t.name).filter(n => n.startsWith("mcp__"));
+      this.item(thread, { kind: "notice", runId: active.run.id, text: `MCP 已注册工具：${names.join("、") || "无；请查看连接状态与错误"}` });
+    });
   }
-
-  /** Every model a route offers; the demo models only exist in the demo workspace. GPT models follow the signed-in ChatGPT method. */
-  async models(source: CredentialSource, force = false, session: Session = this.current, provider?: string): Promise<{ models: ModelOption[]; error?: string }> {
-    if (source === "demo") return { models: session.demo ? DEMO_MODELS : [] };
-    if (source === "cursor") return this.listCursorModels(force, session);
-    if (source === "key") {
-      const account = provider ? this.keyAccount(provider) : undefined;
-      return { models: account ? await this.pi.providerModels(account.provider) : [] };
+  setResource(pid: string, input: { id?: string; path?: string; kind?: Resource["kind"]; enabled: boolean }) {
+    this.idleProject(pid); const project = this.project(pid);
+    let resource = project.resources.find(r => r.id === input.id);
+    if (!resource) { if (!input.path || !input.kind || !["rule", "skill", "extension"].includes(input.kind)) throw new Error("请提供资源类型和路径"); resource = { id: id(), path: fs.realpathSync(input.path), kind: input.kind, enabled: false }; project.resources.push(resource); }
+    enableResource(resource, input.enabled); this.save(); this.changed(); return resource;
+  }
+  setMcp(pid: string, configs: McpConfig[]) {
+    this.idleProject(pid); const project = this.project(pid);
+    if (!Array.isArray(configs) || configs.length > 20) throw new Error("MCP 配置应为不超过 20 项的列表");
+    for (const m of configs) {
+      if (!/^[a-zA-Z0-9_-]{1,60}$/.test(m.name) || typeof m.enabled !== "boolean" || !!m.command === !!m.url || m.args?.some(x => typeof x !== "string")) throw new Error("MCP 需要唯一名称以及 command 或 url");
+      if (m.url) { const url = new URL(m.url); if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("无效 MCP 地址"); }
     }
-    const piProvider = this.auth.chatgpt ? CHATGPT_PROVIDERS[this.auth.chatgpt] : "openai";
-    return { models: (await this.pi.providerModels(piProvider)).filter((m) => /^(gpt-5|gpt-6|o3|o4)/.test(m.id)) };
+    if (new Set(configs.map(m => m.name)).size !== configs.length) throw new Error("MCP 名称不能重复");
+    project.mcp = configs.map(m => ({ name: m.name, command: m.command, args: m.args, url: m.url, enabled: m.enabled })); this.save(); this.changed(); return project.mcp;
   }
-
-  /** A model the user picked for a chat in `session`, checked against its route's live list ("one family, one route" between subscriptions included). */
-  async resolveModel(pick: ModelPickInput, session: Session = this.current): Promise<ChatModel> {
-    const source = pick.source ?? "";
-    const model = pick.model ?? "";
-    const routeError = validateModelRoute(source, model);
-    if (routeError) throw new Error(routeError);
-    const route = source as CredentialSource;
-    const account = route === "key" ? (pick.provider ? this.keyAccount(pick.provider) : undefined) : undefined;
-    if (route === "key" && !account) throw new Error("没有这个 API key 账号，请到「模型」页添加");
-    const found = (await this.models(route, false, session, account?.provider)).models.find((m) => m.id === model);
-    if (!found) throw new Error(`${account?.label ?? ROUTES[route].label} 线路上没有模型 ${model}`);
-    let thinking: ThinkingLevel | undefined;
-    if (pick.thinking) {
-      if (!found.thinking?.includes(pick.thinking as ThinkingLevel)) throw new Error(`${found.name || model} 不支持思考档位 ${pick.thinking}`);
-      thinking = pick.thinking as ThinkingLevel;
-    }
-    const wantsFast = pick.fast === true || pick.fast === "1" || pick.fast === "true";
-    if (wantsFast && !(supportsFastTier(model) && (route === "chatgpt" || account?.template === "openai"))) {
-      throw new Error(`${found.name || model} 没有快速模式`);
-    }
-    return { source: route, model, name: found.name || model, provider: account?.provider, account: account?.label, thinking, ...(wantsFast ? { fast: true } : {}) };
+  memories(pid: string) { return memories(this.project(pid)); }
+  changeMemory(tid: string, name: string, content?: string) {
+    const thread = this.thread(tid), project = this.project(thread.projectId), file = memoryPath(project, name);
+    if (thread.access === "read") throw new Error("当前对话为只读，请切换权限后保存记忆");
+    if (content && Buffer.byteLength(content) > 1024 * 1024) throw new Error("记忆超过 1MB");
+    return this.queue(thread, content === undefined ? "删除项目记忆" : "保存项目记忆", async active => {
+      const snapshots = this.snapshots(project); snapshots.begin(active.run.id);
+      try { const before = fs.existsSync(file) ? hash(fs.readFileSync(file)) : "absent"; await this.approve(thread, active.run, active.controller.signal, "memory", { name, content }, `${file}\n${content ?? "删除此文件"}`); if ((fs.existsSync(file) ? hash(fs.readFileSync(file)) : "absent") !== before || memoryPath(project, name) !== file) throw new Error("记忆在审批期间发生变化"); active.controller.signal.throwIfAborted(); if (content === undefined) fs.unlinkSync(file); else atomic(file, content); this.item(thread, { kind: "notice", text: "项目记忆已更新，下次读取使用新内容。" }); }
+      finally { active.run.changedFiles = snapshots.finish(active.run.id); }
+    });
   }
-
-  private tidyModel(demo: boolean): TidyModel | undefined {
-    if (!demo && !this.keysConfigured.has("deepseek")) return undefined;
-    const model = demo ? "demo-tidy" : "deepseek-v4-pro";
-    return {
-      name: model,
-      complete: (system, prompt) => this.pi.complete({ demo, provider: "deepseek", model, system, prompt }),
-    };
+  importPreview(pid: string, source: string, name: string, kind: "memory" | "rule") {
+    const project = this.project(pid);
+    if (!["memory", "rule"].includes(kind) || !source.endsWith(".md")) throw new Error("仅允许手动选择 Markdown 规则或记忆");
+    const file = fs.realpathSync(source); if (fs.statSync(file).size > 1024 * 1024) throw new Error("导入文件超过 1MB");
+    const dest = kind === "memory" ? memoryPath(project, name) : safePath(project.root, path.join(".baton-v2/rules", path.basename(memoryPath(project, name))), { write: true });
+    const content = fs.readFileSync(file, "utf8"), current = fs.existsSync(dest) ? fs.readFileSync(dest, "utf8") : undefined;
+    return { source: file, destination: dest, content, current, conflict: current !== undefined, token: hash(JSON.stringify({ file, dest, content, current })) };
   }
+  importMarkdown(tid: string, input: { source: string; name: string; kind: "memory" | "rule"; token: string }) {
+    const thread = this.thread(tid), project = this.project(thread.projectId);
+    const preview = this.importPreview(project.id, input.source, input.name, input.kind);
+    if (preview.token !== input.token) throw new Error("导入预览已过期，请重新预览");
+    return this.queue(thread, "导入 Markdown", async active => {
+      const snapshots = this.snapshots(project); snapshots.begin(active.run.id);
+      try { await this.approve(thread, active.run, active.controller.signal, "import", input, `${preview.destination}\n原内容：${preview.current ?? "[无]"}\n导入内容：${preview.content}`); if (this.importPreview(project.id, input.source, input.name, input.kind).token !== input.token) throw new Error("导入期间文件发生变化"); active.controller.signal.throwIfAborted(); atomic(preview.destination, preview.content); this.item(thread, { kind: "notice", text: "已导入选定 Markdown；规则需在资源设置中确认启用。" }); }
+      finally { active.run.changedFiles = snapshots.finish(active.run.id); }
+    });
+  }
+  async stopAll() { if (this.closing) return; this.closing = true; const jobs = [...this.active.values()]; for (const a of jobs) { a.controller.abort(); a.pi?.session.abortCompaction(); void a.pi?.session.abort(); } await Promise.allSettled(jobs.map(a => a.promise)); if (this.lockToken) { try { this.save(); } finally { this.releaseLock(); } } }
 }

@@ -6,13 +6,14 @@ const PORT = Number(process.env.BATON_PORT ?? DEFAULT_PORT);
 const state = new AppState({ baseUrl: `http://${HOST}:${PORT}` });
 await state.init();
 
-const server = await startServer(state, PORT).catch((error: NodeJS.ErrnoException) => {
+const server = await startServer(state, PORT).catch(async (error: NodeJS.ErrnoException) => {
+  await state.stopAll();
   if (error.code === "EADDRINUSE") console.error(`[baton] port ${PORT} is already in use — is another Baton (web or desktop) running?`);
   else console.error(error);
   process.exit(1);
 });
 console.log(`[baton] API listening on ${server.url}`);
-console.log(`[baton] workspace: ${state.ws.root}${state.demo ? " (demo)" : ""}`);
+console.log(`[baton] local data: ${state.home}`);
 
 const shutdown = async () => {
   await server.close();

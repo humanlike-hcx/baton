@@ -3,6 +3,7 @@ node_modules/
 dist/
 apps/desktop/build/
 apps/desktop/out/
+apps/desktop/out-next/
 *.tsbuildinfo
 .DS_Store
 .env
@@ -10,3 +11,5 @@ apps/desktop/out/
 coverage/
 /tmp-scaffold/
 /.demo-workspace/
+
+/work/

@@ -1,111 +1,158 @@
-# Baton · 多模型对话工作台
+# Baton
 
-把你已经在付费的订阅（ChatGPT、Cursor）和任意服务的 API key 接进同一个本地工作台：打开就是对话框，所有账号下的全部模型都能直接选、随时换着聊；改了文件之后，一键「让另一个模型检查」。每个对话属于一个项目（工作区），左边按项目分组；同一个项目里的模型读写同一批文件，共用一套上下文、记忆、工具和规则，不同项目的对话可以同时在跑。引擎是 [Pi](https://github.com/earendil-works/pi)，Cursor 的模型通过官方 Cursor Agent CLI 的 ACP 模式接入。
+一个支持普通聊天的本地桌面编程助手。在同一段对话里理解代码、修改文件、运行测试，并查看每一步工具操作和文件改动。
 
-单人、单机：本地网页和 macOS 桌面版是同一套。要做什么、验收标准和当前进度见 [`docs/spec.md`](docs/spec.md)，实现方式见 [`docs/design.md`](docs/design.md)。
+Baton 使用 **Pi 1.4.0** 执行 Agent 循环和保存会话，所有模型请求只经过你独立运行的 **Magpie**。Baton 不管理供应商账号，也不会读取 Codex、Cursor 或其他应用的登录文件。
 
-## 接入方式
+![Baton 聊天首页](docs/images/home.png)
 
-每个模型家族只有一条接入路线，不重复：
+## 开始使用
 
-| 运行时 | 账号来源 | 模型 |
-|---|---|---|
-| Pi | ChatGPT 登录（Sign in with ChatGPT，或 Codex 账号） | GPT 系，只走这一条 |
-| Cursor Agent（ACP） | Cursor 登录（`agent login`） | Cursor 里的非 GPT、非 DeepSeek 模型（Claude、Gemini、Composer…），不提供 Auto |
-| Pi | 任意多个 API key（OpenAI、Anthropic、Gemini、DeepSeek、Kimi、智谱、通义、OpenRouter、硅基流动、Ollama、任意 OpenAI / Anthropic 兼容服务…） | 这个服务的全部模型，按量计费 |
+1. 独立启动 Magpie，并在 Magpie 中配置模型服务。
+2. 启动 Baton，进入 **设置 → 连接与模型**。填入 Magpie API 基础地址，例如 `http://127.0.0.1:3425/v1`。如网关要求鉴权，再填写网关凭据。
+3. 保存并检查连接，在模型目录中点击 **测试连接**。测试会发送两次小型模型请求，可能消耗额度；通过后该模型才可用于对话。
+4. 启动后直接在居中输入框聊天，默认不选择项目。需要操作文件时，在输入框下方选择项目；点击合并的模型与推理强度入口选择参数。发送第一条消息才会保存对话。
+5. 项目对话默认权限为 **询问**。修改文件、运行命令或调用外部工具前，查看目标与预览，再允许或拒绝本次操作。
 
-不需要建任何配置：登录之后，这个账号下的模型就出现在输入框旁的选择框里。对话和运行记录只记「账号 + 模型」。
+支持 Magpie 明确报告具有工具调用能力的 Chat Completions 和 Responses 模型。目录能连接不等于工具链可用；未知能力不会根据模型名称补全。
 
-## 它做什么
+## 日常工作
 
-- **打开即对话**：首页就是新对话的输入框，左边是历史对话。随时换模型接着聊，新模型从对话摘要和最近几轮原文接上前面的内容。
-- **一个权限开关**：每个对话里选「只读」（默认）、「每次问我」或「允许直接改」，只对这个对话有效，服务重启后回到只读。可写时先快照、同一时间只有一个对话在改文件。
-- **让另一个模型检查**：先跑工作区配置的检查命令，再由另一个模型（默认推荐不同家族的）只读地审查这个对话里的改动，结论和问题贴回对话。检查命令有失败时结论不能是通过。
-- **共享上下文**：`CONTEXT.md`（房间上下文）、长期记忆（置顶的注入启动上下文，其余按需检索）、教训（反复出现的问题，提醒你固化成规则或检查）、分层规则。
-- **启动上下文可见**：每个模型开始回复或检查时收到什么、每段多大、来自哪里、有没有重复，都能在「模型」页查看；超出预算会拦下，不会悄悄截断。
-- **快照与回滚**：每次可写的回复前后用影子 git（`.baton/shadow.git`）快照工作区，可以看 diff、一键回滚。
-- **权限**：路径边界和禁止路径、命令白名单/黑名单、执行和联网审批；凭据只存本机，不进浏览器、不进工具环境。
+- **草稿与归档**：重复点击新建复用同一个草稿，不生成空历史；切换会话或设置保留本次打开期间的未发送输入。悬停侧栏对话可归档，底部“已归档”可搜索、恢复；历史和项目文件保留，运行中的对话需先停止。
+- **普通聊天**：不选择项目也能问答、讨论和解释粘贴的代码。历史独立保存，支持换模型与重启续聊；不开放本机文件、命令或项目资源。
+- **持续对话**：每个对话对应持久化 Pi 会话。切换模型或重启 Baton 后继续使用已有历史；可在输入框下方“上下文”菜单中手动压缩。完整记录保留，但摘要可能省略细节。
+- **运行中补充**：选择“影响当前任务”或“完成后再处理”。投递时机遵循 Pi，不保证立即打断已经启动的命令。“停止”不会自动撤销文件。
+- **项目组织**：每个项目可以有多个对话，点击项目前的箭头折叠或展开，重开后保留偏好。不同项目并行，同项目任务按顺序运行；移除侧栏入口保留项目文件和历史。
+- **文件改动**：查看某次运行的前后内容，预览后再撤销。恢复保留运行前已有的未提交修改；发现后续编辑或无法确定改动归属时拒绝自动恢复。
+- **明确的用量**：只展示上游实际返回的 token 数据。费用或上下文能力缺失时显示未知。
 
-## 本地运行
+### 三种权限
 
-需要 Node.js ≥ 22.19 和 pnpm 10。
+| 权限 | 行为 |
+| --- | --- |
+| 只读 | 仅开放项目读取工具，不开放命令、写入或外部工具 |
+| 询问 | 每次写入、命令或外部工具调用都需单独批准，默认选择 |
+| 直接执行 | 当前对话直接执行；不传播给其他对话，重启后恢复询问 |
+
+这些是应用层工具权限。命令和受信扩展仍具有本机用户权限，不是操作系统安全隔离。批准的命令可能访问项目以外的文件或外部系统。
+
+### 规则、Skills、扩展与记忆
+
+首次发现的资源默认停用，在 **设置 → 规则与 Skills** 中确认来源后启用。按列表顺序加载规则，变更在下一次运行生效。
+
+```text
+项目/
+├── AGENTS.md
+└── .baton-v2/
+    ├── rules/*.md
+    ├── skills/<name>/SKILL.md
+    ├── extensions/<name>.mjs
+    └── memory/*.md
+```
+
+Baton 也支持自身数据目录中的 `v2/resources/{rules,skills,extensions}` 和手动添加的路径，不自动扫描其他 Agent 应用的配置。
+
+扩展须附带 `<扩展文件>.baton.json`：
+
+```json
+{ "host": "baton-v2", "ui": "none" }
+```
+
+声明用于限制兼容范围，不代表安全认证。首版只适配无需终端 UI 的选定扩展，代码变化后需要重新确认。加载失败会显示错误。
+
+项目记忆是明确保存的 Markdown 文件，Agent 按需读取，不后台自动提炼，不默认跨项目共享。可在设置中查看、编辑、删除；保存与删除遵循所选对话权限。历史消息中的旧副本仍然保留。
+
+### MCP 工具
+
+在 **设置 → MCP 工具** 中填写已安装服务的配置并检查连接。例如：
+
+```json
+[
+  {
+    "name": "local-tools",
+    "command": "node",
+    "args": ["/absolute/path/to/server.mjs"],
+    "enabled": true
+  }
+]
+```
+
+也可使用 `{ "name": "service", "url": "https://example.com/mcp", "enabled": true }` 配置 HTTP 服务。首版未适配 MCP OAuth 登录。
+
+启用服务代表信任其进程；工具仍受对话权限控制，自报只读不能免除审批。连接失败不会阻断不依赖该服务的普通对话。连接与工具状态显示在当前对话记录中。
+
+## 本地开发
+
+需要 Node.js **22.19 或更新版本**、pnpm **10.33.4**。桌面工具运行项目命令时，还需要本机安装相应语言环境。
 
 ```bash
-pnpm install
+corepack enable
+corepack prepare pnpm@10.33.4 --activate
+pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-打开 <http://127.0.0.1:47320>。
-
-- 网页：Vite 开发服务器，`127.0.0.1:47320`
-- 本地 API + WebSocket：`127.0.0.1:47321`（只监听本机，校验 Host / Origin，写操作需要 `X-Baton` 请求头）
-- 命令执行：macOS / Linux 使用 `bash`，Windows 使用 PowerShell；检查命令按当前平台的语法填写。
-
-第一次启动会自动打开演示工作区 `~/.baton/demo-workspace`，里面有离线的演示模型（「对话」「检查」），不用登录任何账号就能试：把权限切到「允许直接改」，发「写文件：notes/todo.md TODO 补测试」，再点「让另一个模型检查」，会看到检查命令先跑、留着 TODO 的改动被判不通过。
-
-### 接入真实账号
-
-在「模型」页里：
-
-- **ChatGPT**：点「用 ChatGPT 登录」，在浏览器完成授权，会回调到本机 1455 端口。如果工作台跑在别的机器上，把浏览器最后跳转到的 `…:1455/auth/callback…` 链接粘贴回来即可。如果 Sign in with ChatGPT 对你的账号不可用（能登 Codex CLI 却登不上这里），改点「用 Codex 账号登录」，它和 Codex CLI 是同一套登录，同样走 ChatGPT 订阅。
-- **Cursor**：先安装 Cursor Agent CLI（`curl https://cursor.com/install -fsS | bash`），再点「登录 Cursor」。没装 CLI 时可以打开「用内置的模拟 Cursor」体验 ACP 流程。
-- **API key**：在「API key」里选服务（或直接粘贴 key，前缀明确的会自动认出），地址和模型列表自动装配；自定义的兼容服务填地址即可，模型列表从它的 `/models` 拉。可以加多个。房间上下文的自动整理用 DeepSeek 的 key。
-
-然后点左边「项目」旁的文件夹按钮，或到「设置 → 项目」点「选择文件夹…」，用系统的文件夹选择框打开你自己的项目目录（macOS 和 Windows；其他系统请手填路径）。它会出现在侧边栏里，点它旁边的加号就在这个项目里开新对话。也可以手填路径。演示项目留在列表里，不需要时可以在「设置 → 项目」里移除（不删文件）。
-
-凭据保存在 `~/.baton/credentials.json`（权限 0600）。服务启动时会删掉环境里的 `OPENAI_API_KEY`，保证 GPT 只走 ChatGPT 登录。
-
-### 环境变量
-
-| 变量 | 作用 |
-|---|---|
-| `BATON_PORT` | API 端口，默认 `47321` |
-| `BATON_WORKSPACE` | 启动时打开的工作区目录 |
-| `BATON_HOME` | 工作台自己的数据目录，默认 `~/.baton` |
-| `BATON_DEMO=1` | 把打开的工作区当作演示工作区（出现演示模型） |
-
-### 生产模式
+开发前端为 `http://127.0.0.1:47320`，本地应用服务为 `http://127.0.0.1:47321`。开发服务和桌面应用默认使用同一端口，启动桌面前先停止开发服务。
 
 ```bash
-pnpm build   # 构建网页到 apps/web/dist
-pnpm start   # API 服务同时托管网页，打开 http://127.0.0.1:47321
-```
-
-### 桌面版（macOS）
-
-```bash
-pnpm desktop   # 生成 apps/desktop/out/Baton-darwin-<arch>/Baton.app
-```
-
-双击 `Baton.app` 即可使用，服务和界面与网页版是同一套，数据目录同为 `~/.baton`；关掉窗口即退出。桌面版和网页版用同一个端口，不能同时开。应用只做了 ad-hoc 签名，适合在本机自己构建、自己用。
-
-## 给模型用的共享工具
-
-Pi 里的模型直接调用工作台工具。Cursor 里的模型通过工作台写进工作区 `.cursor/mcp.json` 的 MCP 服务（`packages/mcp/bin/baton-mcp.mjs`）使用同一套：`read_context`、`memory_search`、`remember`、`submit_review`（检查时给出结论）。
-
-也可以在终端里用 `baton` 命令（`packages/mcp/bin/baton.mjs`）：
-
-```bash
-node packages/mcp/bin/baton.mjs context
-node packages/mcp/bin/baton.mjs memory "日期格式"
-node packages/mcp/bin/baton.mjs remember "所有日期统一用 ISO 8601"
-```
-
-## 目录结构
-
-```
-packages/core   引擎：工作区存储、规则与启动上下文、记忆、工具、权限、快照、线路规则、执行器（Pi / ACP）、对话编排
-packages/mcp    MCP 服务和 baton 命令行，通过本地 API 调用工作台工具
-apps/server     本地 HTTP + WebSocket 服务，登录流程、审批、凭据
-apps/web        网页界面（React + Vite + Tailwind + shadcn/ui）
-apps/desktop    Electron 桌面版外壳
-docs/spec.md    规格说明：要做什么、验收标准、当前进度
-docs/design.md  设计文档
-```
-
-## 测试
-
-```bash
-pnpm test        # 本地 HTTP API 测试 + 单元测试 + 演示对话端到端 + 模拟 Cursor 的 ACP 测试
 pnpm typecheck
+pnpm test
+pnpm build
+pnpm smoke:start
+pnpm smoke:dev
 ```
+
+生产网页仅用于开发调试：`pnpm build && pnpm start`。
+
+### 构建桌面包
+
+```bash
+pnpm desktop
+```
+
+产物位于 `apps/desktop/out/`。macOS 打开目录中的 `Baton.app`；Windows 解压完整目录后运行 `Baton.exe`，保留旁边的资源文件。
+
+可指定目标平台和架构：
+
+```bash
+pnpm build
+pnpm --filter @baton/desktop build -- --platform=win32 --arch=x64
+```
+
+CI 包含 macOS、Windows 与 Linux 检查，以及 macOS / Windows 桌面打包。打包成功不能替代相应操作系统的真实桌面验收。首版未提供正式签名、公证或自动更新。
+
+**已验证环境：macOS arm64。Windows x64 包保留待验收**，当前没有 Windows 真实桌面环境；用户已明确接受保留该待办。逐项状态和证据见 [spec](docs/spec.md#8-当前工程状态与验证证据)。
+
+## 数据与恢复边界
+
+默认数据位于 `~/.baton/v2`；设置 `BATON_HOME` 可改变根目录，新版始终在其下使用 `v2` 命名空间。
+
+| 内容 | 位置 |
+| --- | --- |
+| 项目、对话和运行投影 | `v2/state.json` |
+| Pi 完整会话 | `v2/sessions/<thread>/` |
+| 运行前后文件快照 | `v2/changes/<project>/` |
+| Magpie 连接配置 | `v2/gateway.json` |
+| 桌面日志 | `v2/desktop.log` |
+| 项目记忆 | 项目内 `.baton-v2/memory/*.md` |
+
+网关凭据只保存为本机受限文件，不进入界面响应或模型上下文。模型上下文会通过 Magpie 发往你选择的服务，外部工具也可能访问外部系统。Baton 不新增遥测。
+
+旧版数据不会自动迁移或删除。可以通过 **导入 Markdown** 预览并选择性导入旧规则或记忆，目标冲突需再次确认。旧供应商凭据不会被读取，清理由你自行决定。
+
+文件快照排除 `.git`、旧 `.baton`、`node_modules`；单文件最多 16 MB、总内容最多 256 MB、最多 30,000 个条目。超限、特殊文件或无法可靠扫描时阻止可写运行。符号链接不跟随，硬链接拒绝建立可恢复基线。
+
+自动恢复适用于能够可靠归属的文件工具写入。命令、扩展或 MCP 改变项目文件时保留 diff，但因归属不确定而阻止自动恢复。数据库、网络请求、安装依赖造成的环境变化等外部副作用不能通过文件恢复撤销。
+
+关闭窗口会退出 Baton、取消自身任务并保存状态，独立 Magpie 继续运行。异常退出后的任务标记为中断，不自动重放命令；会话文件缺失时停止继续运行，避免静默丢失历史。
+
+## 工程结构
+
+```text
+apps/desktop   Electron 桌面入口、文件夹选择与打包
+apps/web       React 对话、审批、设置与改动查看
+apps/server    本机 API、项目队列、审批、运行状态
+packages/core  Pi 适配、唯一网关出口、资源、快照与命令执行
+```
+
+[产品规格与验收状态](docs/spec.md)是唯一需求状态来源；[实现设计](docs/design.md)描述架构与取舍。旧版供应商登录、ACP、独立检查会话、角色编排、接力流程及 MCP 服务端入口已从当前代码移除，历史通过 Git 查阅。

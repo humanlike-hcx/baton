@@ -72,6 +72,7 @@ export function runShell(
   options: { cwd: string; timeoutMs?: number; maxBytes?: number; signal?: AbortSignal; env?: NodeJS.ProcessEnv },
 ): Promise<ShellResult> {
   const started = Date.now();
+  options.signal?.throwIfAborted();
   const maxBytes = options.maxBytes ?? 16 * 1024;
   return new Promise((resolve) => {
     const shell = shellCommand(command);
@@ -103,6 +104,9 @@ export function runShell(
     }, options.timeoutMs ?? 120_000);
     const onAbort = () => kill();
     options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
+    // End the owned process group even when a shell exits before its background children.
+    child.on("exit", () => { if (process.platform !== "win32") killShell(child); });
     const finish = (exitCode: number | null, signal: string | null) => {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
@@ -114,7 +118,7 @@ export function runShell(
         stdout: stdout.text,
         stderr: stderr.text,
         timedOut,
-        truncated: stdout.truncated || stderr.truncated,
+        truncated: stdout.truncated || stderr.truncated || outBytes > cap || errBytes > cap,
         durationMs: Date.now() - started,
       });
     };
@@ -131,5 +135,6 @@ export function formatShellResult(command: string, r: ShellResult): string {
   if (r.stdout.trim()) parts.push(`stdout:\n${r.stdout.trimEnd()}`);
   if (r.stderr.trim()) parts.push(`stderr:\n${r.stderr.trimEnd()}`);
   if (!r.stdout.trim() && !r.stderr.trim()) parts.push("（无输出）");
+  if (r.truncated) parts.push("[输出已截断，退出码仍为实际进程结果]");
   return parts.join("\n");
 }

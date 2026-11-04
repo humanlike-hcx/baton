@@ -1,181 +1,27 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
-import type { Thread, WorkspaceSettings } from "@baton/core";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { fauxProvider, fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
+import { AppState } from "../src/state.ts";
 import { createApp } from "../src/app.ts";
-import { AppState, MOCK_CURSOR, nodeScriptCommand } from "../src/state.ts";
-
-export const HOST = "127.0.0.1:47321";
-export const MOCK_CURSOR_COMMAND = nodeScriptCommand(MOCK_CURSOR);
-
-export interface ModelRef {
-  source: string;
-  model: string;
-}
-
-export const DEMO_CHAT: ModelRef = { source: "demo", model: "demo-chat" };
-export const DEMO_REVIEW: ModelRef = { source: "demo", model: "demo-review" };
-export const CURSOR_COMPOSER: ModelRef = { source: "cursor", model: "composer-2.5" };
-export const CURSOR_SONNET: ModelRef = { source: "cursor", model: "claude-sonnet-5-5-medium" };
-
-export function tempDir(prefix: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-}
-
-/** Windows junctions cover the directory-link behavior without requiring symlink privileges. */
-export function createDirectoryLink(target: string, link: string): void {
-  fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
-}
-
-/** POSIX credentials are 0600; Windows credentials must have no inherited ACL entries. */
-export function isPrivateFile(file: string): boolean {
-  if (process.platform !== "win32") return (fs.statSync(file).mode & 0o777) === 0o600;
-  const acl = execFileSync("icacls.exe", [file], { encoding: "utf8", windowsHide: true });
-  return acl.toLowerCase().includes(os.userInfo().username.toLowerCase()) && !acl.includes("(I)");
-}
-
-/** Recursively reject TODO in notes, using a command that works in both sh and PowerShell. */
-export const NO_TODO_CHECK =
-  `node -e "const fs=require('fs'),p=require('path');const walk=d=>fs.readdirSync(d,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(p.join(d,e.name)):[p.join(d,e.name)]);process.exit(walk('notes').some(f=>fs.readFileSync(f,'utf8').includes('TODO'))?1:0)"`;
-
-export interface ApiResponse<T> {
-  status: number;
-  body: T;
-  text: string;
-}
-
-/**
- * A complete Baton service in-process: temporary data directory and workspace, demo models,
- * the mock Cursor CLI, and no listening port. Every response body is recorded so tests can
- * assert on what ever reached the browser.
- */
-export async function testServer(
-  options: {
-    autoApprove?: boolean;
-    settings?: (s: WorkspaceSettings) => void;
-    /** Restart on an earlier server's directories. */
-    reuse?: { home: string; root: string };
-    /** Folder dialog stand-in; the default refuses instead of opening a real dialog. */
-    pickDirectory?: () => Promise<string | undefined>;
-    /** Runs after the temp directories exist and before the service starts. */
-    prepare?: (dirs: { home: string; root: string }) => void;
-    /** Codex CLI auth.json. Defaults to a file that is not there, so a real login is never imported. */
-    codexAuthFile?: string | ((home: string) => string);
-  } = {},
-) {
-  const home = options.reuse?.home ?? tempDir("baton-home-");
-  const root = options.reuse?.root ?? tempDir("baton-ws-");
-  options.prepare?.({ home, root });
-  // Port 9 (discard) is never served, so the mock Cursor's MCP callbacks fail fast instead of reaching a dev server.
-  const state = new AppState({
-    baseUrl: "http://127.0.0.1:9",
-    home,
-    workspace: root,
-    demo: true,
-    cursorCommand: MOCK_CURSOR_COMMAND,
-    demoTokensPerSecond: 100_000,
-    pickDirectory: options.pickDirectory ?? (async () => Promise.reject(new Error("测试没有配置文件夹选择"))),
-    codexAuthFile: (typeof options.codexAuthFile === "function" ? options.codexAuthFile(home) : options.codexAuthFile) ?? path.join(home, "no-such-codex-auth.json"),
-  });
-  await state.init();
-  const app = createApp(state);
-  const responses: string[] = [];
-  const events: { type: string; [k: string]: unknown }[] = [];
-
-  async function request<T = any>(method: string, url: string, body?: unknown, headers: Record<string, string> = {}): Promise<ApiResponse<T>> {
-    const res = await app.request(url, {
-      method,
-      headers: { host: HOST, "x-baton": "1", "content-type": "application/json", ...headers },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const text = await res.text();
-    responses.push(text);
-    let parsed: unknown;
-    try {
-      parsed = text ? JSON.parse(text) : undefined;
-    } catch {
-      parsed = text;
-    }
-    return { status: res.status, body: parsed as T, text };
-  }
-
-  async function ok<T = any>(method: string, url: string, body?: unknown): Promise<T> {
-    const res = await request<T>(method, url, body);
-    if (res.status >= 400) throw new Error(`${method} ${url} → ${res.status}: ${res.text}`);
-    return res.body;
-  }
-
-  state.subscribe((message) => {
-    const event = message as { type: string; thread?: Thread };
-    events.push(event);
-    if (options.autoApprove === false || event.type !== "thread" || !event.thread) return;
-    for (const item of event.thread.items) {
-      if (item.kind === "approval" && item.status === "pending") {
-        setTimeout(() => void request("POST", `/api/approvals/${item.approvalId}`, { allow: true }), 0);
-      }
-    }
-  });
-
-  if (options.settings) {
-    const s = await ok<WorkspaceSettings>("GET", "/api/settings");
-    options.settings(s);
-    await ok("PUT", "/api/settings", s);
-  }
-
-  const thread = (id: string) => ok<Thread>("GET", `/api/threads/${id}`);
-
-  async function waitForThread(id: string, predicate: (t: Thread) => boolean, label = "thread condition", timeoutMs = 30_000): Promise<Thread> {
-    const start = Date.now();
-    for (;;) {
-      const t = await thread(id);
-      if (predicate(t)) return t;
-      if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${label}; status ${t.status}, ${t.runs.length} runs`);
-      await new Promise((r) => setTimeout(r, 20));
-    }
-  }
-
-  /** Waits until no run is in progress and the thread is waiting for the user. */
-  const settled = (id: string, timeoutMs?: number) =>
-    waitForThread(
-      id,
-      (t) => !t.runs.some((r) => r.status === "running") && (t.status === "waiting" || t.status === "paused" || (t.status === "idle" && t.runs.length > 0 && t.notes.length === 0)),
-      "thread to settle",
-      timeoutMs,
-    );
-
-  /** Opens a chat on `model`, optionally sets its access, and sends `task` if given. */
-  async function chat(task: string, options: { model?: ModelRef; access?: "read" | "ask" | "allow" } = {}): Promise<Thread> {
-    const created = await ok<Thread>("POST", "/api/threads", { task: options.access ? "" : task, ...(options.model ?? DEMO_CHAT) });
-    if (options.access) {
-      await ok("POST", `/api/threads/${created.id}/access`, { access: options.access });
-      if (task) await ok("POST", `/api/threads/${created.id}/messages`, { text: task });
-    }
-    return created;
-  }
-
-  /** Sends a message and waits for the reply to it. */
-  async function say(threadId: string, text: string, model?: ModelRef): Promise<Thread> {
-    const before = (await thread(threadId)).runs.length;
-    await ok("POST", `/api/threads/${threadId}/messages`, { text, ...model });
-    return waitForThread(threadId, (t) => t.runs.length > before && !t.runs.some((r) => r.status === "running") && t.status !== "running", "chat reply");
-  }
-
-  return {
-    state,
-    app,
-    home,
-    root,
-    responses,
-    events,
-    request,
-    get: <T = any>(url: string) => ok<T>("GET", url),
-    post: <T = any>(url: string, body: unknown = {}) => ok<T>("POST", url, body),
-    put: <T = any>(url: string, body: unknown) => ok<T>("PUT", url, body),
-    thread,
-    waitForThread,
-    settled,
-    chat,
-    say,
+export { fauxAssistantMessage as answer, fauxToolCall as call };
+export async function fixture(steps: FauxResponseStep[] = []) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "baton-v2-test-")), home = path.join(root, "data"), projectRoot = path.join(root, "project");
+  fs.mkdirSync(path.join(home, "v2"), { recursive: true }); fs.mkdirSync(projectRoot);
+  fs.writeFileSync(path.join(home, "v2/gateway.json"), JSON.stringify({ url: "http://127.0.0.1:1/v1", token: "", models: ["a", "b"].map(id => ({ id, name: id, api: "openai-completions", verified: true, thinking: [], contextWindow: 32768 })) }));
+  const faux = fauxProvider({ provider: "baton-magpie", models: ["a", "b"].map(id => ({ id, contextWindow: 32768, maxTokens: 4096 })), tokensPerSecond: 100000 });
+  faux.setResponses(steps);
+  const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false, credentials: { read: async () => undefined, list: async () => [], modify: async () => undefined, delete: async () => {} } });
+  runtime.registerNativeProvider(faux.provider);
+  const makeState = () => new AppState({ home, runtime: async () => runtime, approvalTimeoutMs: 5000 });
+  let state = makeState(); await state.init(); let app = createApp(state);
+  const request = async (url: string, method = "GET", body?: unknown, extraHeaders = {}) => {
+    const response = await app.request(`http://127.0.0.1${url}`, { method, headers: { host: "127.0.0.1", "x-baton": "1", "content-type": "application/json", ...extraHeaders }, body: body === undefined ? undefined : JSON.stringify(body) });
+    return { status: response.status, data: await response.json() as any };
   };
+  const p = await request("/api/projects", "POST", { path: projectRoot });
+  const t = await request("/api/threads", "POST", { projectId: p.data.id, model: { id: "a" } });
+  return { root, home, projectRoot, project: p.data, thread: t.data, faux, request, get state() { return state; }, async restart() { await state.stopAll(); state = makeState(); await state.init(); app = createApp(state); }, async close() { await state.stopAll(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
+export async function until(fn: () => unknown, timeout = 6000) { const end = Date.now() + timeout; while (Date.now() < end) { if (fn()) return; await new Promise(r => setTimeout(r, 10)); } throw new Error("condition timed out"); }

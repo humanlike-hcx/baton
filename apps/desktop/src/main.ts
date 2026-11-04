@@ -7,7 +7,7 @@ import { app, BrowserWindow, dialog, Menu, shell } from "electron";
 import type { RunningServer } from "@baton/server/serve";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const LOG = path.join(process.env.BATON_HOME ?? path.join(os.homedir(), ".baton"), "desktop.log");
+const LOG = path.join(process.env.BATON_HOME ?? path.join(os.homedir(), ".baton"), "v2", "desktop.log");
 
 function log(...parts: unknown[]): void {
   const line = `${new Date().toISOString()} ${parts.map((p) => (p instanceof Error ? (p.stack ?? p.message) : String(p))).join(" ")}\n`;
@@ -19,8 +19,9 @@ function log(...parts: unknown[]): void {
   }
 }
 
-/** Apps opened from Finder get launchd's minimal PATH, which has neither the Cursor CLI nor git. */
+/** Finder apps need the login PATH for project commands. Windows retains its native PATH. */
 function adoptLoginShellPath(): void {
+  if (process.platform === "win32") return;
   const dirs = new Set<string>();
   try {
     const out = execFileSync(process.env.SHELL || "/bin/zsh", ["-ilc", 'printf "__BATON_PATH__%s" "$PATH"'], { encoding: "utf8", timeout: 5000 });
@@ -76,11 +77,12 @@ async function start(): Promise<void> {
   // state.ts reads BATON_RESOURCES when it loads, so the server bundle is only imported after it is set.
   const { AppState, DEFAULT_PORT, HOST, startServer } = (await import(pathToFileURL(path.join(here, "server.mjs")).href)) as typeof import("./server.ts");
   const port = Number(process.env.BATON_PORT ?? DEFAULT_PORT);
-  const state = new AppState({ baseUrl: `http://${HOST}:${port}` });
+  const state = new AppState({ baseUrl: `http://${HOST}:${port}`, pickDirectory: async () => { const result = await dialog.showOpenDialog({ properties: ["openDirectory"] }); return result.canceled ? undefined : result.filePaths[0]; } });
   await state.init();
   try {
     server = await startServer(state, port);
   } catch (error) {
+    await state.stopAll();
     if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") {
       dialog.showErrorBox("Baton 已经在运行", `端口 ${port} 已被占用，可能是网页版（pnpm dev / pnpm start）或另一个 Baton 还开着。先关掉它，再打开桌面版。`);
       app.exit(1);
@@ -88,7 +90,7 @@ async function start(): Promise<void> {
     }
     throw error;
   }
-  log(`service listening on ${server.url}, workspace ${state.ws.root}, PATH ${process.env.PATH}`);
+  log(`service listening on ${server.url}, data ${state.home}`);
   createWindow(server.url);
 }
 

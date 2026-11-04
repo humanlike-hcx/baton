@@ -1,120 +1,51 @@
-import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import YAML from "yaml";
-
-export function newId(prefix: string): string {
-  const time = Date.now().toString(36);
-  return `${prefix}_${time}${randomBytes(3).toString("hex")}`;
-}
-
-export function nowIso(): string {
-  return new Date().toISOString();
-}
-
-export function sha256(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
-export function byteLength(text: string): number {
-  return Buffer.byteLength(text, "utf8");
-}
-
-/** Rough token estimate: ~4 bytes per token for ASCII, ~1.5 chars per token for CJK. */
-export function estimateTokens(text: string): number {
-  let cjk = 0;
-  for (const ch of text) if (/[\u3400-\u9fff]/.test(ch)) cjk++;
-  const rest = text.length - cjk;
-  return Math.ceil(rest / 4 + cjk / 1.5);
-}
-
-export function writeFileAtomic(file: string, content: string, mode?: number): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${randomBytes(3).toString("hex")}.tmp`;
-  fs.writeFileSync(tmp, content, mode === undefined ? undefined : { mode });
-  fs.renameSync(tmp, file);
-}
-
-export function readText(file: string, fallback = ""): string {
+import os from "node:os";
+import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+export const id = () => randomUUID();
+export const now = () => new Date().toISOString();
+export const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+export function atomic(file: string, content: string | Buffer, mode = 0o600, privateFile = false) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${id()}.tmp`;
   try {
-    return fs.readFileSync(file, "utf8");
-  } catch {
-    return fallback;
+    fs.writeFileSync(tmp, "", { mode, flag: "wx" });
+    if (privateFile && process.platform === "win32") {
+      const principal = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${os.userInfo().username}` : os.userInfo().username;
+      const acl = spawnSync("icacls.exe", [tmp, "/inheritance:r", "/grant:r", `${principal}:(F)`], { windowsHide: true, stdio: "pipe" });
+      if (acl.error || acl.status !== 0) throw new Error("无法限制网关凭据文件的访问权限，配置未保存");
+    }
+    fs.writeFileSync(tmp, content); fs.renameSync(tmp, file);
   }
+  finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
 }
-
 export function readJson<T>(file: string, fallback: T): T {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8")) as T;
-  } catch {
-    return fallback;
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return fallback; throw new Error(`本地数据无法读取：${path.basename(file)}；请保留文件排查`); }
+}
+export function truncateMiddle(text: string, limit: number) {
+  const data = Buffer.from(text); if (data.length <= limit) return { text, truncated: false };
+  const half = Math.floor(limit / 2);
+  return { text: data.subarray(0, half).toString() + "\n…[输出已截断]…\n" + data.subarray(-half).toString(), truncated: true };
+}
+export function inside(root: string, file: string) { const rel = path.relative(root, file); return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel)); }
+/** Resolve every existing ancestor; never trust a lexical prefix or a symlink target. */
+export function safePath(root: string, input: string, options: { extraRead?: string[]; write?: boolean } = {}): string {
+  if (typeof input !== "string" || input.includes("\0")) throw new Error("无效文件路径");
+  const resolved = path.resolve(root, input);
+  const roots = [root, ...(!options.write ? options.extraRead ?? [] : [])].map(r => fs.realpathSync(r));
+  let ancestor = resolved;
+  const tail: string[] = [];
+  while (!fs.existsSync(ancestor)) {
+    if (fs.lstatSync(ancestor, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error("不能访问损坏的符号链接");
+    const parent = path.dirname(ancestor); if (parent === ancestor) throw new Error("找不到访问路径");
+    tail.unshift(path.basename(ancestor)); ancestor = parent;
   }
+  const real = path.join(fs.realpathSync(ancestor), ...tail);
+  if (!roots.some(r => inside(r, real))) throw new Error("路径超出本对话已授权的项目范围");
+  if (options.write && path.relative(root, real).split(path.sep).some(p => [".git", ".baton", "node_modules"].includes(p))) throw new Error("此目录不在可恢复文件范围内");
+  if (options.write && fs.existsSync(real) && fs.statSync(real).isFile() && fs.statSync(real).nlink > 1) throw new Error("硬链接文件无法可靠限制写入范围");
+  return real;
 }
-
-export function parseFrontmatter<T extends object>(text: string): { data: Partial<T>; body: string } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
-  if (!match) return { data: {}, body: text.trim() };
-  const data = (YAML.parse(match[1]!) ?? {}) as Partial<T>;
-  return { data, body: match[2]!.trim() };
-}
-
-export function stringifyFrontmatter(data: object, body: string): string {
-  const clean = Object.fromEntries(Object.entries(data).filter(([, v]) => v !== undefined));
-  return `---\n${YAML.stringify(clean).trimEnd()}\n---\n\n${body.trim()}\n`;
-}
-
-/** Keep the head and tail, cut the middle. */
-export function truncateMiddle(text: string, maxBytes: number): { text: string; truncated: boolean } {
-  if (byteLength(text) <= maxBytes) return { text, truncated: false };
-  const half = Math.floor(maxBytes / 2);
-  const buf = Buffer.from(text, "utf8");
-  const head = buf.subarray(0, half).toString("utf8").replace(/\uFFFD+$/, "");
-  const tail = buf.subarray(buf.length - half).toString("utf8").replace(/^\uFFFD+/, "");
-  const omitted = buf.length - 2 * half;
-  return { text: `${head}\n…[省略中间 ${omitted} 字节]…\n${tail}`, truncated: true };
-}
-
-export function slugify(text: string, max = 40): string {
-  const slug = text
-    .toLowerCase()
-    .replace(/[^a-z0-9\u3400-\u9fff]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return (slug || "item").slice(0, max);
-}
-
-/** Character bigrams for CJK, lowercase words for everything else. */
-export function searchTerms(text: string): string[] {
-  const terms: string[] = [];
-  const lower = text.toLowerCase();
-  for (const word of lower.match(/[a-z0-9_.-]{2,}/g) ?? []) terms.push(word);
-  for (const run of lower.match(/[\u3400-\u9fff]+/g) ?? []) {
-    if (run.length === 1) terms.push(run);
-    for (let i = 0; i < run.length - 1; i++) terms.push(run.slice(i, i + 2));
-  }
-  return terms;
-}
-
-export function similarity(a: string, b: string): number {
-  const ta = new Set(searchTerms(a));
-  const tb = new Set(searchTerms(b));
-  if (ta.size === 0 || tb.size === 0) return 0;
-  let both = 0;
-  for (const t of ta) if (tb.has(t)) both++;
-  return both / Math.min(ta.size, tb.size);
-}
-
-export function globToRegExp(glob: string): RegExp {
-  let re = "";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i]!;
-    if (c === "*") {
-      if (glob[i + 1] === "*") {
-        re += ".*";
-        i++;
-        if (glob[i + 1] === "/") i++;
-      } else re += "[^/]*";
-    } else if (c === "?") re += "[^/]";
-    else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  }
-  return new RegExp(`^${re}$`);
-}
+export const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);

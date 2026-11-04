@@ -1,8 +1,10 @@
-# 给进入本仓库的 agent
+# Baton 仓库协作约定
 
-1. 开始工作前先读 `docs/spec.md`：它规定了要做什么、验收标准和每条需求的当前状态。`docs/design.md` 讲怎么实现，两者冲突时以 spec 为准。
-2. 只做 spec 里有编号的用户故事（`US-编号`）。要做 spec 里没有的事，先请用户确认并把它补进 spec。
-3. 提交信息用约定式提交（feat / fix / chore / docs / refactor / test），并引用故事编号，例如 `feat(chat): add chat threads (US-17)`。
-4. 完成一条故事时，在同一个提交里更新它在 spec 中的状态。只有在有自动化测试或手动验收步骤之后，才能标为「完成」。
-5. 提交前运行 `pnpm typecheck` 和 `pnpm test`，都要通过。
-6. 新测试优先写在本地 HTTP API 这一层（见 spec 的「测试决策」），外部依赖用 Pi 的假模型和模拟 Cursor CLI 代替。
+1. 先读 `docs/spec.md`。它是产品范围、验收标准和 US-105～US-133 状态的唯一来源；实现方式见 `docs/design.md`。
+2. 只实现 spec 已编号的故事。旧架构与旧故事留在 Git 历史，不恢复已移除能力。
+3. 模型请求只走独立 Magpie。不要读取或同步任何供应商或其他 Agent 应用的登录文件；不要接管 Magpie 进程。
+4. Pi 1.4.0 的实际 SDK 接口是适配依据。会话使用持续保存的 SessionManager；不要重建模型—工具循环。
+5. 提交采用约定式提交，引用 US 编号。在同一提交中更新 spec 的实际验证证据；假模型、真实网关和两个桌面系统的结果分开记录。
+6. 提交前运行 `pnpm typecheck`、`pnpm test`、`pnpm build`。测试优先走本地 HTTP API，外部依赖使用 Pi faux provider、可控网关和 MCP 替身。不要把替身通过写成真实模型验收。
+7. `.baton` 旧数据原样保留；新版只使用 `BATON_HOME/v2` 和显式的项目 `.baton-v2` 资源。禁止自动迁移凭据或旧对话。
+8. 恢复文件须先预览并检查冲突。命令和受信扩展使用宿主权限，不能宣称 OS 级隔离。

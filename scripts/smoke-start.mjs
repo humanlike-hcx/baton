@@ -20,7 +20,7 @@ const port = await new Promise((resolve, reject) => {
 
 const options = {
   cwd: root,
-  env: { ...process.env, BATON_PORT: String(port), BATON_HOME: home, BATON_DEMO: "1" },
+  env: { ...process.env, BATON_PORT: String(port), BATON_HOME: home },
   stdio: ["ignore", "pipe", "pipe"],
   windowsHide: true,
   detached: process.platform !== "win32",
@@ -63,7 +63,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   if (!state) throw new Error(`${label} server did not become ready\n${output}`);
-  if (!state.workspace?.demo) throw new Error(`unexpected smoke workspace: ${JSON.stringify(state.workspace)}`);
+  if (state.projects.length !== 0 || state.gateway.configured) throw new Error("Fresh startup must be empty and must not import legacy credentials");
   console.log(`${label} smoke passed on ${process.platform} (${port})`);
 } finally {
   terminate();

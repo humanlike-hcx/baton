@@ -1,0 +1,33 @@
+[
+ {
+  "date": "2026-11-04",
+  "mode": "redesign",
+  "depth": "full",
+  "scope": "app",
+  "shape": "app screen",
+  "genre": "modern-minimal",
+  "theme": "Coral, neutral adaptation to explicit Codex reference",
+  "deal": "baton-desktop-coding-agent-88e2·cd511c5b·2026-11-04·r0",
+  "axes": [
+   "light",
+   "grotesk-sans",
+   "warm"
+  ],
+  "hero": "working conversation",
+  "nav": "project sidebar",
+  "footer": "composer",
+  "imagery": "real product only",
+  "photos": [],
+  "entry": "project folder",
+  "fingerprint": "sidebar/conversation/inline-tools/bottom-composer/settings-nav",
+  "sections": [
+   "conversation",
+   "settings",
+   "approval",
+   "diff"
+  ],
+  "signature": "inline tool approvals beside real messages",
+  "waived": [],
+  "prompt": "仿照 Codex 重做桌面编程 Agent 前端；继续去除奇怪的线条框。"
+ }
+]

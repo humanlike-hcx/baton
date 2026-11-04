@@ -1,0 +1,26 @@
+{
+  "date": "2026-11-04",
+  "mode": "redesign",
+  "scope": "app",
+  "depth": "full",
+  "reference": "https://chatgpt.com/codex/",
+  "preserved": [
+    "project/thread data and API handlers",
+    "Markdown/code/math rendering",
+    "approval/diff/resource/memory/MCP flows"
+  ],
+  "introduced": [
+    "neutral project sidebar",
+    "centered conversation and compact tools",
+    "model and permission popovers",
+    "settings navigation and soft surface inputs"
+  ],
+  "sources": [
+    "docs/spec.md:1",
+    "apps/web/src/App.tsx:1",
+    "apps/web/src/components/chat.tsx:1",
+    "apps/web/src/components/settings.tsx:1",
+    "apps/web/src/tokens.css:1"
+  ],
+  "latest_direction": "User explicitly requested removal of conspicuous border boxes; use softly filled controls and a neutral keyboard focus indicator."
+}
