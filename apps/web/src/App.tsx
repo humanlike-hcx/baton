@@ -41,9 +41,6 @@ function Shell() {
       await post(`/api/threads/${t.id}/archive`);
       if (t.id === tid) select();
       await refresh();
-      toast("对话已归档", { duration: 7000, action: { label: "撤销", onClick: () => {
-        void post<Thread>(`/api/threads/${t.id}/restore`).then(async restored => { await refresh(); select(state?.projects.find(p => p.id === restored.projectId), restored); }).catch(e => toast.error(e.message));
-      } } });
     } catch (e) { toast.error((e as Error).message); }
   };
   const open = async (target: string) => {
