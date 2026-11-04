@@ -65,6 +65,13 @@ try {
   if (!state) throw new Error(`${label} server did not become ready\n${output}`);
   if (state.projects.length !== 0 || state.gateway.configured) throw new Error("Fresh startup must be empty and must not import legacy credentials");
   console.log(`${label} smoke passed on ${process.platform} (${port})`);
+} catch (error) {
+  // Keep startup failures visible in check annotations, including when raw logs require login.
+  if (process.env.GITHUB_ACTIONS === "true") {
+    const detail = String(error).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+    console.error(`::error title=Baton ${label} startup::${detail}`);
+  }
+  throw error;
 } finally {
   terminate();
   fs.rmSync(home, { recursive: true, force: true });
