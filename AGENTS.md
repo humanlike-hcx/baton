@@ -1,6 +1,6 @@
 # Baton 仓库协作约定
 
-1. 先读 `docs/spec.md`。它是产品范围、验收标准和 US-105～US-133 状态的唯一来源；实现方式见 `docs/design.md`。
+1. 先读 `docs/spec.md`。它是产品范围、验收标准和 US-105～US-135 状态的唯一来源；实现方式见 `docs/design.md`。
 2. 只实现 spec 已编号的故事。旧架构与旧故事留在 Git 历史，不恢复已移除能力。
 3. 模型请求只走独立 Magpie。不要读取或同步任何供应商或其他 Agent 应用的登录文件；不要接管 Magpie 进程。
 4. Pi 1.4.0 的实际 SDK 接口是适配依据。会话使用持续保存的 SessionManager；不要重建模型—工具循环。

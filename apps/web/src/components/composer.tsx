@@ -22,8 +22,8 @@ export function rememberModel(model: ModelPick) {
 export function ModelMenu({ value, onChange, disabled, onSettings }: { value?: ModelPick; onChange: (value: ModelPick) => void; disabled?: boolean; onSettings?: () => void }) {
   const { state } = useBaton();
   const [open, setOpen] = useState(false), [panel, setPanel] = useState<"effort" | "models">("effort"), [search, setSearch] = useState("");
-  const models = state?.gateway.models.filter(m => m.verified) ?? [];
-  const selected = models.find(m => m.id === value?.id);
+  const models = state?.gateway.models.filter(m => m.verified && m.enabled) ?? [];
+  const selected = state?.gateway.models.find(m => m.verified && m.id === value?.id);
   const supportsFast = selected?.fastMode === true;
   const fastEnabled = supportsFast && value?.serviceTier === "priority";
   const thinking = selected?.thinking.includes(value?.thinking as Thinking) ? value?.thinking : selected?.thinking[0];
@@ -35,6 +35,7 @@ export function ModelMenu({ value, onChange, disabled, onSettings }: { value?: M
   const levels = selected?.thinking ?? [];
   const selectedOption = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (open && panel === "models") selectedOption.current?.focus({ preventScroll: true }); }, [open, panel]);
+  if (!models.length) return null;
   return <ControlMenu label="模型与推理强度" align="end" className={panel === "effort" && selected && (thinking || supportsFast) ? "effort-menu" : "model-menu"} disabled={disabled} open={open} onOpenChange={next => { setOpen(next); if (next) setPanel(selected && (thinking || supportsFast) ? "effort" : "models"); else setSearch(""); }} trigger={<>{supportsFast && <Zap size={15} className={fastEnabled ? "fast-indicator enabled" : "fast-indicator"} aria-label={fastEnabled ? "快速模式已开启" : "快速模式未开启"}/>}<span className="model-name">{selected?.name ?? "选择模型"}</span>{thinking && <span className="model-effort">{thinkingLabels[thinking]}</span>}<ChevronDown size={13}/></>}>
     {panel === "effort" && selected && (thinking || supportsFast) ? <div key="effort" className="picker-panel">
       <div className="effort-heading">
@@ -59,7 +60,7 @@ export function ModelMenu({ value, onChange, disabled, onSettings }: { value?: M
         {filtered.map(m => <button key={m.id} ref={m.id === selected?.id ? selectedOption : undefined} className="model-option" disabled={disabled} aria-pressed={m.id === value?.id} title={m.id} onClick={() => {
           change({ id: m.id, thinking: m.thinking.includes(thinking as Thinking) ? thinking : m.thinking[0], ...(m.id === selected?.id && fastEnabled ? { serviceTier: "priority" } : {}) }); setOpen(false);
         }}><span>{m.name}</span>{m.id === value?.id && <Check size={17}/>}</button>)}
-        {!filtered.length && <p className="menu-empty">{models.length ? "没有匹配的模型" : "连接 Magpie 并测试模型后，即可选择。"}</p>}
+        {!filtered.length && <p className="menu-empty">没有匹配的模型</p>}
       </div>
     </div>}
   </ControlMenu>;

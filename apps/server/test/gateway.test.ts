@@ -4,16 +4,17 @@ import path from "node:path";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, expect, it } from "vitest";
 import { Gateway } from "@baton/core";
+import { until } from "./helpers.ts";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 const stops: (() => Promise<void>)[] = [];
 afterEach(async () => { await Promise.all(stops.splice(0).map(fn => fn())); });
 async function mock() {
-  const requests: { url: string; authorization?: string; body: any }[] = [];
+  const requests: { url: string; authorization?: string; userAgent?: string; body: any }[] = [];
   let mode = "normal";
   const handler = async (req: IncomingMessage, res: ServerResponse) => {
     let body = ""; for await (const chunk of req) body += chunk;
     const payload = body ? JSON.parse(body) : undefined;
-    requests.push({ url: req.url!, authorization: req.headers.authorization, body: payload });
+    requests.push({ url: req.url!, authorization: req.headers.authorization, userAgent: req.headers["user-agent"], body: payload });
     if (mode === "unauthorized") { res.writeHead(401, { "content-type": "application/json" }); res.end('{"error":"server quoted gateway-secret-token"}'); return; }
     if (req.url === "/v1/models") {
       res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ data: [
@@ -21,6 +22,7 @@ async function mock() {
         { id: "unknown-capability", context_window: 12345 },
         { id: "responses-fixture", tool_call: true, native_endpoints: ["/v1/responses"], service_tiers: [{ id: "priority", name: "Fast" }] },
         { id: "no-fast", display_name: "Flash is only a name", tool_call: true, native_endpoints: ["/v1/chat/completions"], service_tiers: [null, "priority", { id: "auto" }, { name: "Fast" }] },
+        ...(mode === "new-model" ? [{ id: "new-model", tool_call: true, native_endpoints: ["/v1/chat/completions"] }] : []),
       ] })); return;
     }
     res.setHeader("content-type", "text/event-stream");
@@ -46,8 +48,8 @@ async function mock() {
   const address = server.address() as { port: number };
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "baton-gateway-test-"));
   const gateway = new Gateway(root); gateway.configure({ url: `http://127.0.0.1:${address.port}/v1`, token: "gateway-secret-token" });
-  stops.push(async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(root, { recursive: true, force: true }); });
-  return { gateway, requests, setMode(next: string) { mode = next; } };
+  stops.push(async () => { await gateway.stop(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(root, { recursive: true, force: true }); });
+  return { root, gateway, requests, setMode(next: string) { mode = next; } };
 }
 it("discovers explicit capabilities, proves a streamed tool round trip, and sends only gateway credentials", async () => {
   const m = await mock(); const result = await m.gateway.refresh();
@@ -60,6 +62,7 @@ it("discovers explicit capabilities, proves a streamed tool round trip, and send
   expect(m.gateway.pick({ id: "fixture-a" }).verified).toBe(true);
   expect(m.requests.map(r => r.url)).toEqual(["/v1/models", "/v1/chat/completions", "/v1/chat/completions"]);
   expect(m.requests.every(r => r.authorization === "Bearer gateway-secret-token")).toBe(true);
+  expect(m.requests.every(r => r.userAgent === "Baton")).toBe(true);
   expect(JSON.stringify(m.gateway.public())).not.toContain("gateway-secret-token");
   expect(JSON.stringify(m.requests.map(r => r.body))).not.toContain("gateway-secret-token");
   m.gateway.configure({ url: "http://127.0.0.1:1/v1" }); expect(m.gateway.public().models).toEqual([]);
@@ -125,4 +128,79 @@ it("sends priority through both protocols only for the selected runtime, includi
     await fast.complete(model, context);
     expect(m.requests.at(-1)!.body.service_tier).toBe("priority");
   }
+});
+
+
+it("automatically checks new models, caches failures and successes, and persists an empty curated list", async () => {
+  const m = await mock(); m.gateway.start();
+  await until(() => m.gateway.public().models.length === 3 && m.gateway.public().models.every(x => x.checkStatus === "ready" || x.checkStatus === "failed"));
+  const ready = m.gateway.public().models.filter(x => x.verified).map(x => x.id);
+  expect(ready).toEqual(["fixture-a", "no-fast"]);
+  expect(m.gateway.public().models.every(x => !x.enabled)).toBe(true);
+  expect(m.gateway.public().models.find(x => x.id === "responses-fixture")!.error).toBeTruthy();
+  m.gateway.selectModels(ready);
+  expect(m.gateway.public().models.filter(x => x.enabled).map(x => x.id)).toEqual(ready);
+  expect(() => m.gateway.selectModels(["responses-fixture"])).toThrow("只能选择");
+  const count = m.requests.filter(r => r.url !== "/v1/models").length;
+  await m.gateway.refresh();
+  expect(m.requests.filter(r => r.url !== "/v1/models")).toHaveLength(count);
+  m.setMode("new-model");
+  await m.gateway.refresh();
+  await until(() => m.gateway.public().models.some(x => x.id === "new-model" && x.verified));
+  expect(m.gateway.public().models.find(x => x.id === "new-model")!.enabled).toBe(false);
+  expect(m.requests.filter(r => r.url !== "/v1/models")).toHaveLength(count + 2);
+  m.setMode("disconnect");
+  await expect(m.gateway.verify("fixture-a")).rejects.toThrow();
+  expect(() => m.gateway.selectModels(["fixture-a", "new-model"])).not.toThrow();
+  m.setMode("normal");
+  m.gateway.selectModels([]);
+  await m.gateway.stop();
+  const reopened = new Gateway(m.root);
+  reopened.start();
+  await until(() => reopened.public().status === "目录已连接");
+  expect(reopened.public().models.every(x => !x.enabled)).toBe(true);
+  expect(m.requests.filter(r => r.url !== "/v1/models")).toHaveLength(count + 3);
+  await reopened.stop();
+});
+
+it("blocks a malformed managed connection instead of silently using manual credentials, then recovers", async () => {
+  const m = await mock();
+  const file = path.join(m.root, "magpie.json");
+  fs.writeFileSync(file, "{broken");
+  m.gateway.start();
+  await expect(m.gateway.refresh()).rejects.toThrow("Magpie 接入配置");
+  expect(m.requests).toHaveLength(0);
+  expect(m.gateway.public().error).toContain("Magpie 接入配置");
+  fs.writeFileSync(file, "{}");
+  await until(() => m.gateway.public().status === "目录已连接");
+  expect(m.gateway.public().error).toBeUndefined();
+  expect(m.requests[0].authorization).toBe("Bearer gateway-secret-token");
+});
+
+it("reads Magpie's separate connection, defers live changes, and restores the manual connection", async () => {
+  const m = await mock(), original = m.gateway.public().url;
+  const connectionFile = path.join(m.root, "magpie.json");
+  const { connect, agent } = await import("../../../integrations/magpie/baton.agent.js");
+  expect(agent.model).toBe("model"); expect(agent.ua).toContain("Baton");
+  const config = { ...connect({ gateway: { v1: original, key: "managed-gateway-key" } }), model: "fixture-a" };
+  fs.writeFileSync(connectionFile, JSON.stringify(config));
+  let idle = false;
+  m.gateway.start(() => idle);
+  await until(() => m.gateway.public().models.length > 0 && m.gateway.public().models.every(x => ["ready", "failed"].includes(x.checkStatus!)));
+  expect(m.gateway.public()).toMatchObject({ managed: true, defaultModelId: "fixture-a" });
+  expect(JSON.stringify(m.gateway.public())).not.toContain("managed-gateway-key");
+  expect(m.requests.every(r => r.authorization === "Bearer managed-gateway-key")).toBe(true);
+  expect(m.requests.every(r => r.userAgent === "Baton")).toBe(true);
+  expect(() => m.gateway.configure({ url: original })).toThrow("由 Magpie 管理");
+  fs.writeFileSync(connectionFile, JSON.stringify({ ...config, model: "no-fast" }));
+  await new Promise(r => setTimeout(r, 1100));
+  expect(m.gateway.public().defaultModelId).toBe("fixture-a");
+  idle = true;
+  await until(() => m.gateway.public().defaultModelId === "no-fast");
+  expect(m.gateway.public().models.every(x => !x.enabled)).toBe(true);
+  fs.writeFileSync(connectionFile, "{}");
+  await until(() => !m.gateway.public().managed);
+  await until(() => m.requests.at(-1)?.authorization === "Bearer gateway-secret-token");
+  expect(m.gateway.public().url).toBe(original);
+  expect(JSON.parse(fs.readFileSync(path.join(m.root, "gateway.json"), "utf8")).token).toBe("gateway-secret-token");
 });

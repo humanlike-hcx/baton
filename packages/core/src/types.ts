@@ -5,9 +5,10 @@ export interface ModelOption {
   id: string; name: string; api: "openai-completions" | "openai-responses";
   contextWindow?: number; maxTokens?: number; thinking: Thinking[]; fastMode?: boolean;
   verified: boolean; verifiedAt?: string; error?: string;
+  checkedAt?: string; enabled?: boolean; checkStatus?: "pending" | "checking" | "ready" | "failed";
 }
 export interface ModelPick { id: string; thinking?: Thinking; serviceTier?: "priority" }
-export interface GatewayPublic { url: string; configured: boolean; hasToken: boolean; status: string; error?: string; models: ModelOption[] }
+export interface GatewayPublic { url: string; configured: boolean; hasToken: boolean; status: string; error?: string; models: ModelOption[]; managed?: boolean; defaultModelId?: string }
 export interface Resource { id: string; kind: "rule" | "skill" | "extension"; path: string; enabled: boolean; error?: string; hash?: string; compatible?: boolean }
 export interface McpConfig { name: string; command?: string; args?: string[]; url?: string; enabled: boolean }
 export interface Project { id: string; root: string; name: string; removed?: boolean; resources: Resource[]; mcp: McpConfig[] }

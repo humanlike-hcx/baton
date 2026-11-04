@@ -30,7 +30,7 @@ export class AppState {
   constructor(private options: AppStateOptions = {}) {
     this.home = path.join(options.home ?? process.env.BATON_HOME ?? path.join(os.homedir(), ".baton"), "v2");
     fs.mkdirSync(this.home, { recursive: true, mode: 0o700 });
-    this.gateway = new Gateway(this.home);
+    this.gateway = new Gateway(this.home, () => this.broadcast());
     this.data = { projects: [], threads: [] };
   }
   async init() {
@@ -58,6 +58,7 @@ export class AppState {
       if (t.pending.length) this.item(t, { kind: "notice", text: "上次未投递的插话仍保留，请确认后手动重新发送。" });
     }
     this.save();
+    if (!this.options.runtime) this.gateway.start(() => !this.active.size);
     } catch (error) { this.releaseLock(); throw error; }
   }
   private releaseLock() {
@@ -301,5 +302,5 @@ export class AppState {
       finally { active.run.changedFiles = snapshots.finish(active.run.id); }
     });
   }
-  async stopAll() { if (this.closing) return; this.closing = true; const jobs = [...this.active.values()]; for (const a of jobs) { a.controller.abort(); a.pi?.session.abortCompaction(); void a.pi?.session.abort(); } await Promise.allSettled(jobs.map(a => a.promise)); if (this.lockToken) { try { this.save(); } finally { this.releaseLock(); } } }
+  async stopAll() { if (this.closing) return; this.closing = true; const jobs = [...this.active.values()]; for (const a of jobs) { a.controller.abort(); a.pi?.session.abortCompaction(); void a.pi?.session.abort(); } await Promise.allSettled([this.gateway.stop(), ...jobs.map(a => a.promise)]); if (this.lockToken) { try { this.save(); } finally { this.releaseLock(); } } }
 }

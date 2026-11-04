@@ -428,3 +428,13 @@ button.effort-model { min-height: 26px; }
 .effort-fast[aria-pressed="true"] svg, .fast-indicator.enabled { fill: currentColor; }
 .fast-indicator { color: var(--color-muted); }
 .composer-controls > .control-trigger:has(.model-name) > svg.fast-indicator { display: block; flex-shrink: 0; }
+
+/* Model availability lives in settings; the composer only holds the chosen list. */
+.model-selection-actions { display: flex; align-items: center; gap: var(--space-xs); margin: var(--space-md) 0; }
+.model-selection-actions span { color: var(--color-muted); font-size: var(--text-sm); margin-left: auto; }
+.model-selection-row { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: var(--space-sm); align-items: start; padding: var(--space-md) 0; }
+.model-selection-row > input { margin-top: var(--space-2xs); }
+.model-selection-row strong { display: block; font-weight: 500; }
+.model-selection-row small { display: block; color: var(--color-muted); font-size: var(--text-xs); margin-top: var(--space-2xs); overflow-wrap: anywhere; }
+.model-selection-row p { margin: var(--space-xs) 0 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.model-selection-row .error-text { color: var(--color-error); }

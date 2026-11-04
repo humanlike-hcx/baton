@@ -1,0 +1,9 @@
+{
+  "name": "magpie-agent-baton",
+  "version": "0.1.0",
+  "description": "Manage Baton's Magpie connection and default model from the Agents page",
+  "type": "module",
+  "files": ["baton.agent.js", "README.md"],
+  "magpie": { "agent": "./baton.agent.js", "name": "Baton" },
+  "license": "MIT"
+}
