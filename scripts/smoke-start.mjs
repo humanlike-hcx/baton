@@ -32,6 +32,14 @@ const child =
 let output = "";
 child.stdout.on("data", (chunk) => (output += chunk.toString()));
 child.stderr.on("data", (chunk) => (output += chunk.toString()));
+const closed = new Promise(resolve => child.once("close", resolve));
+
+function report(error) {
+  if (process.env.GITHUB_ACTIONS !== "true") return;
+  const detail = `${error instanceof Error ? error.stack : error}\n${output}`
+    .replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+  console.error(`::error title=Baton ${label} smoke::${detail}`);
+}
 
 function terminate() {
   if (!child.pid || child.exitCode !== null) return;
@@ -67,12 +75,23 @@ try {
   console.log(`${label} smoke passed on ${process.platform} (${port})`);
 } catch (error) {
   // Keep startup failures visible in check annotations, including when raw logs require login.
-  if (process.env.GITHUB_ACTIONS === "true") {
-    const detail = String(error).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
-    console.error(`::error title=Baton ${label} startup::${detail}`);
-  }
+  report(error);
   throw error;
 } finally {
-  terminate();
-  fs.rmSync(home, { recursive: true, force: true });
+  let timer;
+  try {
+    terminate();
+    // The service saves state during shutdown; deleting its directory before close races that write.
+    const stopped = await Promise.race([
+      closed.then(() => true),
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), 5_000); }),
+    ]);
+    if (!stopped) throw new Error(`${label} process did not close after shutdown; retained ${home}`);
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch (error) {
+    report(error);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
