@@ -10,7 +10,7 @@ export function Draft({ text, onText, project, onProject, onOpen, onStarted, onS
   const { state, refresh } = useBaton();
   const [pick, setPick] = useState<ModelPick>(), [access, setAccess] = useState<Access>("ask"), [busy, setBusy] = useState(false);
   useEffect(() => { setAccess("ask"); }, [project?.id]);
-  const models = state?.gateway.models.filter(m => m.verified && m.enabled) ?? [];
+  const models = state?.gateway.models.filter(m => m.enabled) ?? [];
   const preferred = pick?.id ?? state?.gateway.defaultModelId ?? rememberedModel()?.id;
   const selected = models.find(m => m.id === preferred) ?? models[0];
   const model: ModelPick | undefined = selected ? { id: selected.id, thinking: (pick?.thinking && selected.thinking.includes(pick.thinking)) ? pick?.thinking : selected.thinking[0], ...(selected.id === pick?.id && selected.fastMode && pick.serviceTier === "priority" ? { serviceTier: "priority" } : {}) } : undefined;

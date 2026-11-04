@@ -22,8 +22,8 @@ export function rememberModel(model: ModelPick) {
 export function ModelMenu({ value, onChange, disabled, onSettings }: { value?: ModelPick; onChange: (value: ModelPick) => void; disabled?: boolean; onSettings?: () => void }) {
   const { state } = useBaton();
   const [open, setOpen] = useState(false), [panel, setPanel] = useState<"effort" | "models">("effort"), [search, setSearch] = useState("");
-  const models = state?.gateway.models.filter(m => m.verified && m.enabled) ?? [];
-  const selected = state?.gateway.models.find(m => m.verified && m.id === value?.id);
+  const models = state?.gateway.models.filter(m => m.enabled) ?? [];
+  const selected = state?.gateway.models.find(m => m.id === value?.id);
   const supportsFast = selected?.fastMode === true;
   const fastEnabled = supportsFast && value?.serviceTier === "priority";
   const thinking = selected?.thinking.includes(value?.thinking as Thinking) ? value?.thinking : selected?.thinking[0];

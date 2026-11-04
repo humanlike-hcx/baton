@@ -4,8 +4,7 @@ export type Status = "queued" | "running" | "succeeded" | "failed" | "cancelled"
 export interface ModelOption {
   id: string; name: string; api: "openai-completions" | "openai-responses";
   contextWindow?: number; maxTokens?: number; thinking: Thinking[]; fastMode?: boolean;
-  verified: boolean; verifiedAt?: string; error?: string;
-  checkedAt?: string; enabled?: boolean; checkStatus?: "pending" | "checking" | "ready" | "failed";
+  enabled?: boolean;
 }
 export interface ModelPick { id: string; thinking?: Thinking; serviceTier?: "priority" }
 export interface GatewayPublic { url: string; configured: boolean; hasToken: boolean; status: string; error?: string; models: ModelOption[]; managed?: boolean; defaultModelId?: string }

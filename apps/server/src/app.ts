@@ -34,7 +34,6 @@ export function createApp(state: AppState) {
   app.put("/api/gateway", async c => { const b = await body(c); return c.json(state.configureGateway({ url: string(b.url, "地址"), ...(b.token !== undefined ? { token: string(b.token, "网关凭据") } : {}) })); });
   app.post("/api/gateway/check", async c => { const result = await state.gateway.refresh(); state.broadcast(); return c.json(result); });
   app.put("/api/gateway/selection", async c => { const b = await body(c); return c.json(state.gateway.selectModels(b.ids)); });
-  app.post("/api/gateway/verify", async c => { const b = await body(c); const result = state.gateway.retry(string(b.id, "模型")); state.broadcast(); return c.json(result); });
   app.post("/api/projects", async c => { const b = await body(c); return c.json(state.openProject(string(b.path, "项目路径"))); });
   app.post("/api/projects/pick", async c => c.json({ path: await state.pickDirectory() }));
   app.delete("/api/projects/:id", c => { state.removeProject(c.req.param("id")); return c.json({ ok: true }); });

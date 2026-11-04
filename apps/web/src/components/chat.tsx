@@ -31,7 +31,7 @@ export function Chat({ thread, text, onText: setText, onSettings }: { thread: Th
   const { state, refresh } = useBaton();
   const [mode, setMode] = useState<"steer" | "followUp">("steer"), [busy, setBusy] = useState(false), [changes, setChanges] = useState<ChangePreview>();
   const end = useRef<HTMLDivElement>(null), scroll = useRef<HTMLDivElement>(null), following = useRef(true);
-  const active = thread.status !== "idle", models = state?.gateway.models.filter(m => m.verified) ?? [], selected = models.find(m => m.id === thread.model?.id);
+  const active = thread.status !== "idle", models = state?.gateway.models ?? [], selected = models.find(m => m.id === thread.model?.id);
   const project = state?.projects.find(p => p.id === thread.projectId);
   const latest = thread.runs.at(-1), empty = !thread.items.length;
   useEffect(() => { if (following.current) end.current?.scrollIntoView({ behavior: "instant", block: "end" }); }, [thread.items.length, thread.items.at(-1)?.text]);

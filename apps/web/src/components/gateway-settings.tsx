@@ -18,7 +18,7 @@ export function GatewaySettings() {
   return <>
     <section className="settings-section">
       <h1>连接与模型</h1>
-      <p>{gateway?.managed ? "连接由 Magpie 管理。在 Magpie 的 Baton 一行选择新对话的默认模型。" : "连接独立运行的 Magpie，模型目录会自动同步并检测。"}</p>
+      <p>{gateway?.managed ? "连接由 Magpie 管理。在 Magpie 的 Baton 一行选择新对话的默认模型。" : "连接独立运行的 Magpie，自动同步模型目录。"}</p>
       <label>API 基础地址（包含 /v1）<input disabled={gateway?.managed} value={url} onChange={e => setUrl(e.target.value)}/></label>
       {!gateway?.managed && <label>网关鉴权信息<input type="password" autoComplete="off" value={token} placeholder={gateway?.hasToken ? "已保存；留空保留" : "本机网关无需鉴权时留空"} onChange={e => setToken(e.target.value)}/></label>}
       <div className="row">
@@ -30,9 +30,9 @@ export function GatewaySettings() {
     </section>
     <section className="settings-section">
       <h2>聊天框中的模型</h2>
-      <p>勾选你想在聊天框切换的模型。新增模型会自动检测，检测会发送少量请求；通过后由你决定是否加入。</p>
+      <p>勾选你想在聊天框切换的模型。</p>
       <div className="model-selection-actions">
-        <button disabled={busy || !models.some(m => m.verified)} onClick={() => choose(models.filter(m => m.verified).map(m => m.id))}>全选</button>
+        <button disabled={busy || !models.length} onClick={() => choose(models.map(m => m.id))}>全选</button>
         <button disabled={busy || !selected.length} onClick={() => choose([])}>全不选</button>
         <span>已选 {selected.length} 个</span>
       </div>
@@ -40,9 +40,8 @@ export function GatewaySettings() {
       <div className="model-list">
         {!models.length && <div className="settings-empty">{gateway?.configured ? "正在读取模型目录…" : "连接 Magpie 后，模型会显示在这里。"}</div>}
         {models.filter(m => `${m.id} ${m.name}`.toLowerCase().includes(search.toLowerCase())).map(m => <div className="model-selection-row" key={m.id}>
-          <input type="checkbox" aria-label={`在聊天框显示 ${m.name}`} disabled={busy || (!m.verified && !m.enabled)} checked={!!m.enabled} onChange={e => choose(e.target.checked ? [...selected, m.id] : selected.filter(id => id !== m.id))}/>
-          <div><strong>{m.name}</strong><small>{m.id}</small><small className={m.checkStatus === "failed" ? "error-text" : ""}>{m.checkStatus === "checking" ? "检测中…" : m.checkStatus === "pending" ? "等待检测" : m.verified ? "可用" : "检测失败"}{m.fastMode ? "，支持快速模式" : ""}</small>{m.error && m.checkStatus === "failed" && <p className="error-text">{m.error}</p>}</div>
-          {m.checkStatus === "failed" && <button disabled={busy} onClick={() => void act(() => post("/api/gateway/verify", { id: m.id }))}>重试</button>}
+          <input type="checkbox" aria-label={`在聊天框显示 ${m.name}`} disabled={busy} checked={!!m.enabled} onChange={e => choose(e.target.checked ? [...selected, m.id] : selected.filter(id => id !== m.id))}/>
+          <div><strong>{m.name}</strong><small>{m.id}</small>{m.fastMode && <small>支持快速模式</small>}</div>
         </div>)}
       </div>
     </section>

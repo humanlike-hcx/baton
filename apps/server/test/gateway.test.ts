@@ -51,16 +51,13 @@ async function mock() {
   stops.push(async () => { await gateway.stop(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); fs.rmSync(root, { recursive: true, force: true }); });
   return { root, gateway, requests, setMode(next: string) { mode = next; } };
 }
-it("discovers explicit capabilities, proves a streamed tool round trip, and sends only gateway credentials", async () => {
+it("discovers usable models from the catalog without inference requests and sends only gateway credentials", async () => {
   const m = await mock(); const result = await m.gateway.refresh();
   expect(result.models.map(m => m.id)).toEqual(["fixture-a", "responses-fixture", "no-fast"]);
   expect(result.models[0].thinking).toEqual(["off", "low"]);
   expect(result.models.map(m => m.fastMode)).toEqual([true, true, false]);
-  expect(result.models.every(m => !m.verified)).toBe(true);
-  expect(() => m.gateway.pick({ id: "fixture-a" })).toThrow("尚未通过");
-  await m.gateway.verify("fixture-a");
-  expect(m.gateway.pick({ id: "fixture-a" }).verified).toBe(true);
-  expect(m.requests.map(r => r.url)).toEqual(["/v1/models", "/v1/chat/completions", "/v1/chat/completions"]);
+  expect(m.gateway.pick({ id: "fixture-a" }).id).toBe("fixture-a");
+  expect(m.requests.map(r => r.url)).toEqual(["/v1/models"]);
   expect(m.requests.every(r => r.authorization === "Bearer gateway-secret-token")).toBe(true);
   expect(m.requests.every(r => r.userAgent === "Baton")).toBe(true);
   expect(JSON.stringify(m.gateway.public())).not.toContain("gateway-secret-token");
@@ -69,7 +66,7 @@ it("discovers explicit capabilities, proves a streamed tool round trip, and send
 });
 it("reports auth failure without quoting secrets, rejects unconfirmed parameters and provider fallback", async () => {
   const m = await mock(); await m.gateway.refresh();
-  expect(() => m.gateway.pick({ id: "fixture-a", thinking: "high" }, false)).toThrow("未经网关确认");
+  expect(() => m.gateway.pick({ id: "fixture-a", thinking: "high" })).toThrow("未经网关确认");
   const runtime = await m.gateway.runtime(); const builtin = runtime.getModels().find(m => m.provider !== "baton-magpie")!;
   expect(() => runtime.completeSimple(builtin, { messages: [] })).toThrow("必须经过");
   m.setMode("unauthorized"); await expect(m.gateway.refresh()).rejects.toThrow("鉴权失败");
@@ -89,11 +86,11 @@ it("clearly reports an unavailable gateway and rejects URL credentials", async (
 });
 
 it("validates explicit fast capability and preserves the selected tier without inferring it from names", async () => {
-  const m = await mock(); await m.gateway.refresh(); await m.gateway.verify("fixture-a");
+  const m = await mock(); await m.gateway.refresh();
   expect(m.gateway.normalize({ id: "fixture-a", serviceTier: "priority" })).toEqual({ id: "fixture-a", thinking: "off", serviceTier: "priority" });
   expect(m.gateway.normalize({ id: "fixture-a" })).not.toHaveProperty("serviceTier");
-  expect(() => m.gateway.pick({ id: "no-fast", serviceTier: "priority" }, false)).toThrow("快速模式未经网关确认");
-  expect(() => m.gateway.pick({ id: "fixture-a", serviceTier: "auto" as "priority" }, false)).toThrow("快速模式未经网关确认");
+  expect(() => m.gateway.pick({ id: "no-fast", serviceTier: "priority" })).toThrow("快速模式未经网关确认");
+  expect(() => m.gateway.pick({ id: "fixture-a", serviceTier: "auto" as "priority" })).toThrow("快速模式未经网关确认");
   const fast = await m.gateway.runtime({ id: "fixture-a", serviceTier: "priority" });
   m.setMode("no-fast"); await m.gateway.refresh();
   const count = m.requests.length;
@@ -115,6 +112,7 @@ it("sends priority through both protocols only for the selected runtime, includi
     ]);
     expect(reply.stopReason).not.toBe("error"); expect(regular.stopReason).not.toBe("error");
     const sent = m.requests.slice(offset);
+    expect(sent.every(r => r.userAgent === "Baton")).toBe(true);
     expect(sent).toHaveLength(2);
     expect(sent.filter(r => r.body.service_tier === "priority")).toHaveLength(1);
     expect(sent.filter(r => !("service_tier" in r.body))).toHaveLength(1);
@@ -131,36 +129,28 @@ it("sends priority through both protocols only for the selected runtime, includi
 });
 
 
-it("automatically checks new models, caches failures and successes, and persists an empty curated list", async () => {
+it("syncs new models without probes, keeps selection separate, and persists an empty curated list", async () => {
   const m = await mock(); m.gateway.start();
-  await until(() => m.gateway.public().models.length === 3 && m.gateway.public().models.every(x => x.checkStatus === "ready" || x.checkStatus === "failed"));
-  const ready = m.gateway.public().models.filter(x => x.verified).map(x => x.id);
-  expect(ready).toEqual(["fixture-a", "no-fast"]);
+  await until(() => m.gateway.public().models.length === 3);
+  const ids = m.gateway.public().models.map(x => x.id);
+  expect(ids).toEqual(["fixture-a", "responses-fixture", "no-fast"]);
   expect(m.gateway.public().models.every(x => !x.enabled)).toBe(true);
-  expect(m.gateway.public().models.find(x => x.id === "responses-fixture")!.error).toBeTruthy();
-  m.gateway.selectModels(ready);
-  expect(m.gateway.public().models.filter(x => x.enabled).map(x => x.id)).toEqual(ready);
-  expect(() => m.gateway.selectModels(["responses-fixture"])).toThrow("只能选择");
-  const count = m.requests.filter(r => r.url !== "/v1/models").length;
+  expect(m.gateway.pick({ id: "responses-fixture" }).id).toBe("responses-fixture");
+  m.gateway.selectModels(ids);
+  expect(m.gateway.public().models.filter(x => x.enabled).map(x => x.id)).toEqual(ids);
+  expect(() => m.gateway.selectModels(["missing"])).toThrow();
   await m.gateway.refresh();
-  expect(m.requests.filter(r => r.url !== "/v1/models")).toHaveLength(count);
   m.setMode("new-model");
   await m.gateway.refresh();
-  await until(() => m.gateway.public().models.some(x => x.id === "new-model" && x.verified));
   expect(m.gateway.public().models.find(x => x.id === "new-model")!.enabled).toBe(false);
-  expect(m.requests.filter(r => r.url !== "/v1/models")).toHaveLength(count + 2);
-  m.setMode("disconnect");
-  await expect(m.gateway.verify("fixture-a")).rejects.toThrow();
-  expect(() => m.gateway.selectModels(["fixture-a", "new-model"])).not.toThrow();
-  m.setMode("normal");
   m.gateway.selectModels([]);
   await m.gateway.stop();
   const reopened = new Gateway(m.root);
   reopened.start();
   await until(() => reopened.public().status === "目录已连接");
   expect(reopened.public().models.every(x => !x.enabled)).toBe(true);
-  expect(m.requests.filter(r => r.url !== "/v1/models")).toHaveLength(count + 3);
   await reopened.stop();
+  expect(m.requests.every(r => r.url === "/v1/models")).toBe(true);
 });
 
 it("blocks a malformed managed connection instead of silently using manual credentials, then recovers", async () => {
@@ -186,7 +176,7 @@ it("reads Magpie's separate connection, defers live changes, and restores the ma
   fs.writeFileSync(connectionFile, JSON.stringify(config));
   let idle = false;
   m.gateway.start(() => idle);
-  await until(() => m.gateway.public().models.length > 0 && m.gateway.public().models.every(x => ["ready", "failed"].includes(x.checkStatus!)));
+  await until(() => m.gateway.public().models.length > 0);
   expect(m.gateway.public()).toMatchObject({ managed: true, defaultModelId: "fixture-a" });
   expect(JSON.stringify(m.gateway.public())).not.toContain("managed-gateway-key");
   expect(m.requests.every(r => r.authorization === "Bearer managed-gateway-key")).toBe(true);
