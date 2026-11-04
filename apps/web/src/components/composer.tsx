@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUp, Check, ChevronDown, ChevronRight, Folder, FolderPlus, MessageCircle, RotateCcw, Search, ShieldCheck, Square } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, ChevronRight, Folder, FolderPlus, MessageCircle, RotateCcw, Search, ShieldCheck, Square, Zap } from "lucide-react";
 import { Slider } from "radix-ui";
 import type { Access, ModelPick, Project, Thinking } from "@baton/core/types";
 import { useBaton } from "@/lib/store";
@@ -24,33 +24,40 @@ export function ModelMenu({ value, onChange, disabled, onSettings }: { value?: M
   const [open, setOpen] = useState(false), [panel, setPanel] = useState<"effort" | "models">("effort"), [search, setSearch] = useState("");
   const models = state?.gateway.models.filter(m => m.verified) ?? [];
   const selected = models.find(m => m.id === value?.id);
+  const supportsFast = selected?.fastMode === true;
+  const fastEnabled = supportsFast && value?.serviceTier === "priority";
   const thinking = selected?.thinking.includes(value?.thinking as Thinking) ? value?.thinking : selected?.thinking[0];
   const [preview, setPreview] = useState(thinking);
   useEffect(() => { setPreview(thinking); }, [thinking, open]);
   const filtered = models.filter(m => `${m.name} ${m.id}`.toLowerCase().includes(search.toLowerCase()));
   const change = (model: ModelPick) => { onChange(model); rememberModel(model); };
+  const changeThinking = (next: Thinking) => { if (selected) change({ id: selected.id, thinking: next, ...(fastEnabled ? { serviceTier: "priority" } : {}) }); };
   const levels = selected?.thinking ?? [];
   const selectedOption = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (open && panel === "models") selectedOption.current?.focus({ preventScroll: true }); }, [open, panel]);
-  return <ControlMenu label="模型与推理强度" align="end" className={panel === "effort" && selected && thinking ? "effort-menu" : "model-menu"} disabled={disabled} open={open} onOpenChange={next => { setOpen(next); if (next) setPanel(selected && thinking ? "effort" : "models"); else setSearch(""); }} trigger={<><span className="model-name">{selected?.name ?? "选择模型"}</span>{thinking && <span className="model-effort">{thinkingLabels[thinking]}</span>}<ChevronDown size={13}/></>}>
-    {panel === "effort" && selected && thinking ? <div key="effort" className="picker-panel">
-      <div className="effort-heading"><strong>{thinkingLabels[preview ?? thinking]}</strong><button className="icon" aria-label="恢复默认推理强度" title="恢复默认推理强度" disabled={thinking === levels[0]} onClick={() => change({ id: selected.id, thinking: levels[0] })}><RotateCcw size={16}/></button></div>
-      <button className="effort-model" onClick={() => setPanel("models")}>{selected.name}<ChevronRight size={14}/></button>
+  return <ControlMenu label="模型与推理强度" align="end" className={panel === "effort" && selected && (thinking || supportsFast) ? "effort-menu" : "model-menu"} disabled={disabled} open={open} onOpenChange={next => { setOpen(next); if (next) setPanel(selected && (thinking || supportsFast) ? "effort" : "models"); else setSearch(""); }} trigger={<>{supportsFast && <Zap size={15} className={fastEnabled ? "fast-indicator enabled" : "fast-indicator"} aria-label={fastEnabled ? "快速模式已开启" : "快速模式未开启"}/>}<span className="model-name">{selected?.name ?? "选择模型"}</span>{thinking && <span className="model-effort">{thinkingLabels[thinking]}</span>}<ChevronDown size={13}/></>}>
+    {panel === "effort" && selected && (thinking || supportsFast) ? <div key="effort" className="picker-panel">
+      <div className="effort-heading">
+        {supportsFast && <button className="icon effort-fast" aria-label="快速模式" aria-pressed={fastEnabled} disabled={disabled} title={fastEnabled ? "关闭快速模式" : "开启快速模式，可能增加用量"} onClick={() => change({ id: selected.id, thinking, ...(!fastEnabled ? { serviceTier: "priority" } : {}) })}><Zap size={17}/></button>}
+        <strong>{thinking ? thinkingLabels[preview ?? thinking] : "快速模式"}</strong>
+        {thinking && <button className="icon" aria-label="恢复默认推理强度" title="恢复默认推理强度" disabled={disabled || thinking === levels[0]} onClick={() => changeThinking(levels[0])}><RotateCcw size={16}/></button>}
+      </div>
+      <button className="effort-model" disabled={disabled} onClick={() => setPanel("models")}>{selected.name}<ChevronRight size={14}/></button>
       {levels.length > 1 ? <>
-        <Slider.Root className="effort-slider" aria-label="推理强度" min={0} max={levels.length - 1} step={1} value={[Math.max(0, levels.indexOf(preview ?? thinking))]} onValueChange={values => setPreview(levels[values[0]])} onValueCommit={values => change({ id: selected.id, thinking: levels[values[0]] })}>
+        <Slider.Root className="effort-slider" aria-label="推理强度" disabled={disabled} min={0} max={levels.length - 1} step={1} value={[Math.max(0, levels.indexOf((preview ?? thinking)!))]} onValueChange={values => setPreview(levels[values[0]])} onValueCommit={values => changeThinking(levels[values[0]])}>
           <Slider.Track className="effort-track">
             <Slider.Range className="effort-range"/>
             <span className="effort-ticks" aria-hidden="true">{levels.map((level, index) => <span key={level} style={{ left: `${index / (levels.length - 1) * 100}%` }}/>)}</span>
           </Slider.Track>
-          <Slider.Thumb className="effort-thumb" aria-label="推理强度" aria-valuetext={thinkingLabels[preview ?? thinking]}/>
+          <Slider.Thumb className="effort-thumb" aria-label="推理强度" aria-valuetext={thinkingLabels[(preview ?? thinking)!]}/>
         </Slider.Root>
-      </> : <p className="effort-note">当前模型提供此推理档位</p>}
+      </> : <p className="effort-note">{thinking ? "当前模型提供此推理档位" : "此模型未提供推理档位"}</p>}
     </div> : <div key="models" className="picker-panel">
       <div className="model-menu-heading"><span>选择模型</span>{onSettings && <button className="text-button" onClick={() => { setOpen(false); onSettings(); }}>管理</button>}</div>
       {models.length > 6 && <label className="model-search"><Search size={15}/><input aria-label="搜索模型" placeholder="搜索模型" value={search} onChange={e => setSearch(e.target.value)}/></label>}
       <div className="model-options" role="group" aria-label="可用模型">
-        {filtered.map(m => <button key={m.id} ref={m.id === selected?.id ? selectedOption : undefined} className="model-option" aria-pressed={m.id === value?.id} title={m.id} onClick={() => {
-          change({ id: m.id, thinking: m.thinking.includes(thinking as Thinking) ? thinking : m.thinking[0] }); setOpen(false);
+        {filtered.map(m => <button key={m.id} ref={m.id === selected?.id ? selectedOption : undefined} className="model-option" disabled={disabled} aria-pressed={m.id === value?.id} title={m.id} onClick={() => {
+          change({ id: m.id, thinking: m.thinking.includes(thinking as Thinking) ? thinking : m.thinking[0], ...(m.id === selected?.id && fastEnabled ? { serviceTier: "priority" } : {}) }); setOpen(false);
         }}><span>{m.name}</span>{m.id === value?.id && <Check size={17}/>}</button>)}
         {!filtered.length && <p className="menu-empty">{models.length ? "没有匹配的模型" : "连接 Magpie 并测试模型后，即可选择。"}</p>}
       </div>

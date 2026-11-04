@@ -3,10 +3,10 @@ export type Thinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" |
 export type Status = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 export interface ModelOption {
   id: string; name: string; api: "openai-completions" | "openai-responses";
-  contextWindow?: number; maxTokens?: number; thinking: Thinking[];
+  contextWindow?: number; maxTokens?: number; thinking: Thinking[]; fastMode?: boolean;
   verified: boolean; verifiedAt?: string; error?: string;
 }
-export interface ModelPick { id: string; thinking?: Thinking }
+export interface ModelPick { id: string; thinking?: Thinking; serviceTier?: "priority" }
 export interface GatewayPublic { url: string; configured: boolean; hasToken: boolean; status: string; error?: string; models: ModelOption[] }
 export interface Resource { id: string; kind: "rule" | "skill" | "extension"; path: string; enabled: boolean; error?: string; hash?: string; compatible?: boolean }
 export interface McpConfig { name: string; command?: string; args?: string[]; url?: string; enabled: boolean }

@@ -120,8 +120,8 @@ export async function openPi(input: { home: string; project: Project; thread: Th
     hooks.notice(`资源加载问题：${JSON.stringify(problem)}`);
   }
   hooks.persist();
-  const runtime = input.runtime ?? await gateway.runtime();
   if (!thread.model) throw new Error("请先选择模型");
+  const runtime = input.runtime ?? await gateway.runtime(thread.model);
   const model = runtime.getModel("baton-magpie", thread.model.id);
   if (!model) throw new Error("模型已不可用，请重新选择");
   const { session } = await createAgentSession({ cwd: project.root, agentDir, modelRuntime: runtime, model, thinkingLevel: thread.model.thinking ?? "off", settingsManager: settings, resourceLoader: loader, sessionManager: manager, noTools: "builtin", customTools: conversationOnly ? [] : definitions, ...(conversationOnly ? { tools: [] } : thread.access === "read" ? { tools: [...READ], excludeTools: ["mcp__*", "list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"] } : {}) });

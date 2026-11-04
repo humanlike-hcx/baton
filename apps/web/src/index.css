@@ -423,3 +423,8 @@ button.effort-model { min-height: 26px; }
 .effort-thumb { width: var(--effort-thumb-size); height: var(--effort-thumb-size); }
 .effort-ticks { position: absolute; inset: 0 calc(var(--effort-thumb-size) / 2); pointer-events: none; }
 .effort-ticks > span { position: absolute; top: 50%; width: 4px; height: 4px; border-radius: 50%; background: var(--color-paper); transform: translate(-50%, -50%); }
+.effort-heading .effort-fast { grid-column: 1; grid-row: 1; }
+.effort-fast[aria-pressed="true"], .fast-indicator.enabled { color: var(--color-reasoning); }
+.effort-fast[aria-pressed="true"] svg, .fast-indicator.enabled { fill: currentColor; }
+.fast-indicator { color: var(--color-muted); }
+.composer-controls > .control-trigger:has(.model-name) > svg.fast-indicator { display: block; flex-shrink: 0; }

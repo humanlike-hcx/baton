@@ -12,7 +12,7 @@ export function Draft({ text, onText, project, onProject, onOpen, onStarted, onS
   useEffect(() => { setAccess("ask"); }, [project?.id]);
   const models = state?.gateway.models.filter(m => m.verified) ?? [];
   const selected = models.find(m => m.id === pick?.id) ?? models[0];
-  const model: ModelPick | undefined = selected ? { id: selected.id, thinking: (pick?.thinking && selected.thinking.includes(pick.thinking)) ? pick?.thinking : selected.thinking[0] } : undefined;
+  const model: ModelPick | undefined = selected ? { id: selected.id, thinking: (pick?.thinking && selected.thinking.includes(pick.thinking)) ? pick?.thinking : selected.thinking[0], ...(selected.id === pick?.id && selected.fastMode && pick.serviceTier === "priority" ? { serviceTier: "priority" } : {}) } : undefined;
   const send = async () => {
     if (busy || !text.trim() || !model) return;
     setBusy(true);

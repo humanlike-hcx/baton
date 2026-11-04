@@ -49,7 +49,8 @@ export class Gateway {
         const old = this.config.models.find(m => m.id === raw.id && m.api === api);
         const supported = Array.isArray(raw.reasoning_levels) ? raw.reasoning_levels : [];
         const thinking = LEVELS.filter(level => supported.includes(level) || level === "off" && supported.includes("none"));
-        return [{ id: raw.id, name: String(raw.display_name ?? raw.id), api, contextWindow: positive(raw.context_window ?? raw.context_length), maxTokens: positive(raw.max_output_tokens), thinking, verified: old?.verified ?? false, verifiedAt: old?.verifiedAt } satisfies ModelOption];
+        const fastMode = Array.isArray(raw.service_tiers) && raw.service_tiers.some(tier => tier !== null && typeof tier === "object" && tier.id === "priority");
+        return [{ id: raw.id, name: String(raw.display_name ?? raw.id), api, contextWindow: positive(raw.context_window ?? raw.context_length), maxTokens: positive(raw.max_output_tokens), thinking, fastMode, verified: old?.verified ?? false, verifiedAt: old?.verifiedAt } satisfies ModelOption];
       });
       this.status = "目录已连接"; this.error = undefined; this.save();
     } catch (e) {
@@ -64,32 +65,36 @@ export class Gateway {
     if (!model) throw new Error("保存的模型不在当前目录，请刷新并重新选择");
     if (requireVerified && !model.verified) throw new Error("此模型尚未通过流式文本与工具调用连接测试");
     if (pick.thinking && !model.thinking.includes(pick.thinking)) throw new Error("此思考档位未经网关确认");
+    if (pick.serviceTier !== undefined && (pick.serviceTier !== "priority" || !model.fastMode)) throw new Error("此模型的快速模式未经网关确认，请关闭快速模式或重新选择模型");
     return model;
   }
   normalize(pick: ModelPick): ModelPick {
     const model = this.pick(pick);
-    return { id: pick.id, ...(model.thinking.length ? { thinking: pick.thinking ?? model.thinking[0] } : {}) };
+    return { id: pick.id, ...(model.thinking.length ? { thinking: pick.thinking ?? model.thinking[0] } : {}), ...(pick.serviceTier ? { serviceTier: pick.serviceTier } : {}) };
   }
-  async runtime() {
+  async runtime(pick?: ModelPick) {
+    if (pick) this.pick(pick, false);
+    // Capture per-session selection so parallel conversations never share a tier setting.
+    const serviceTier = pick?.serviceTier;
     const runtime = await ModelRuntime.create({ credentials: emptyCredentials, modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
     runtime.registerProvider("baton-magpie", {
       name: "Magpie", api: "openai-completions", apiKey: "baton-gateway-only", baseUrl: this.config.url,
       models: this.config.models.map(m => ({ id: m.id, name: m.name, api: m.api, baseUrl: this.config.url, input: ["text"], reasoning: m.thinking.some(l => l !== "off"), thinkingLevelMap: Object.fromEntries(LEVELS.map(l => [l, m.thinking.includes(l) ? l : null])), contextWindow: m.contextWindow ?? 32768, maxTokens: Math.min(m.maxTokens ?? 4096, 16384), cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat: m.api === "openai-completions" ? { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: m.thinking.length > 0, maxTokensField: "max_tokens" } : { supportsStore: false } })),
-      streamSimple: (model, context, options) => this.stream(model, context, options),
+      streamSimple: (model, context, options) => this.stream(model, context, options, serviceTier),
     });
     // Route every SDK request (including compaction and Responses models) through the same transport.
     for (const method of ["stream", "streamSimple", "complete", "completeSimple"] as const) {
       (runtime as unknown as Record<string, unknown>)[method] = (model: Model<string>, context: Parameters<typeof normalizeContext>[0], options?: SimpleStreamOptions) => {
         if (model.provider !== "baton-magpie") throw new Error("模型请求必须经过配置的 Magpie");
-        const result = this.stream(model, normalizeContext(context), options);
+        const result = this.stream(model, normalizeContext(context), options, serviceTier);
         return method.startsWith("complete") ? result.result() : result;
       };
     }
     return runtime;
   }
-  stream(model: Model<string>, context: TranscriptContext, options?: SimpleStreamOptions) {
+  stream(model: Model<string>, context: TranscriptContext, options?: SimpleStreamOptions, serviceTier?: ModelPick["serviceTier"]) {
     if (model.provider !== "baton-magpie") throw new Error("不允许绕过 Magpie");
-    const selected = this.pick({ id: model.id }, false);
+    const selected = this.pick({ id: model.id, serviceTier }, false);
     const base = this.config.url;
     const gatewayFetch: typeof fetch = async (input, init) => {
       const requestUrl = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -111,7 +116,15 @@ export class Gateway {
       }));
       return new Response(stream, { status: response.status, headers: response.headers });
     };
-    const opts = { ...options, apiKey: "baton-gateway-only", env: {}, fetch: gatewayFetch, maxRetries: 0, timeoutMs: 120000, transport: "sse" as const };
+    const opts: SimpleStreamOptions = { ...options, apiKey: "baton-gateway-only", env: {}, fetch: gatewayFetch, maxRetries: 0, timeoutMs: 120000, transport: "sse", onPayload: async (payload, model) => {
+      const value = await options?.onPayload?.(payload, model) ?? payload;
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("模型请求参数格式无效");
+      const request = { ...value } as Record<string, unknown>;
+      // Both supported protocols accept service_tier. The user selection is authoritative.
+      delete request.service_tier;
+      if (serviceTier) request.service_tier = serviceTier;
+      return request;
+    } };
     const fixed = { ...model, baseUrl: base, headers: undefined };
     return selected.api === "openai-responses" ? responses(fixed as Model<"openai-responses">, context, opts) : completions(fixed as Model<"openai-completions">, context, opts);
   }
